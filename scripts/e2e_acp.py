@@ -23,13 +23,27 @@ import zlib
 MODEL = "agy/gemini-4-hydrogen-low"
 
 
-def agy_pids(container):
+def residents(container):
+    """Resident agy acp processes as {pid: HOME}."""
     out = subprocess.run(
         ["docker", "exec", container, "sh", "-c",
          'for p in /proc/[0-9]*; do c=$(tr "\\0" " " < $p/cmdline 2>/dev/null); '
-         'case "$c" in */agy\\ acp*) echo ${p#/proc/};; esac; done'],
+         'case "$c" in */agy\\ acp*) echo ${p#/proc/} $(tr "\\0" "\\n" < $p/environ | grep ^HOME=);; esac; done'],
         capture_output=True, text=True, check=True).stdout
-    return sorted(int(x) for x in out.split())
+    found = {}
+    for line in out.splitlines():
+        pid, _, home = line.partition(" ")
+        found[int(pid)] = home.removeprefix("HOME=")
+    return found
+
+
+def agy_pids(container):
+    return sorted(residents(container))
+
+
+def one_per_home(container):
+    homes = list(residents(container).values())
+    return len(homes) == len(set(homes))
 
 
 def container_hostname(container):
@@ -127,7 +141,7 @@ def main():
         streamed = all(r["chunks"] >= 1 and r["usage"] for r in results)
         slowest = max(r["total_s"] for r in results)
         pids = agy_pids(a.container)
-        return (all(checks) and streamed and pids == baseline,
+        return (all(checks) and streamed and one_per_home(a.container) and set(baseline) <= set(pids),
                 {"wall_s": round(wall, 2), "serial_sum_s": round(sum(r["total_s"] for r in results), 2),
                  "slowest_s": round(slowest, 2), "pids_after": pids,
                  "per_stream": [{k: (round(v, 2) if isinstance(v, float) else v) for k, v in r.items() if k != "text"} for r in results],
@@ -171,7 +185,7 @@ def main():
 
     def crash_recovery():
         before = agy_pids(a.container)
-        subprocess.run(["docker", "exec", a.container, "kill", "-9", *map(str, before)], check=True)
+        subprocess.run(["docker", "exec", a.container, "sh", "-c", "kill -9 " + " ".join(map(str, before))], check=True)
         time.sleep(1)
         b, lat = cli.chat([{"role": "user", "content": "Reply with just: back"}])
         answer = b["choices"][0]["message"].get("content") or ""
@@ -186,8 +200,9 @@ def main():
         return True, {"latencies_s": times}
     step("warm latency", steady_state)
 
-    report["resident_pids_at_end"] = agy_pids(a.container)
-    report["passed"] = all(s["ok"] for s in report["steps"])
+    report["residents_at_end"] = residents(a.container)
+    report["one_resident_per_home"] = one_per_home(a.container)
+    report["passed"] = all(s["ok"] for s in report["steps"]) and report["one_resident_per_home"]
     with open(a.report, "w") as f:
         json.dump(report, f, indent=2)
     print("report:", a.report, "passed:", report["passed"])

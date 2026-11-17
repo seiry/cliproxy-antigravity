@@ -250,6 +250,12 @@ func discoverModels(cfg pluginConfig) []modelInfo {
 		}
 	}
 
+	// CLIProxyAPI lists Gemini-format models as models/<Name>; keep the routable ID there and
+	// the label in DisplayName, so clients that fetch the Gemini list get usable model IDs.
+	for i := range models {
+		models[i].Name = models[i].ID
+	}
+
 	modelCatalog.fetchedAt = time.Now()
 	modelCatalog.binaryPath = cfg.BinaryPath
 	modelCatalog.models = models

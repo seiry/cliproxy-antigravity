@@ -615,9 +615,24 @@ func acpUsageToAgy(raw json.RawMessage) agyUsage {
 
 var errACPClientGone = errors.New("client stream closed")
 
+// acpInFlight counts running ACP turns so a quiesce can wait for them before closing residents.
+var acpInFlight atomic.Int64
+
+func drainACP(limit time.Duration) {
+	safeGo("drainACP", func() {
+		deadline := time.Now().Add(limit)
+		for acpInFlight.Load() > 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Second)
+		}
+		closeAllACP()
+	})
+}
+
 // runACP executes one prompt on the resident agy for cfg's account. onDelta, when set, receives
 // assistant text as it streams; returning an error from it cancels the ACP turn.
 func runACP(cfg pluginConfig, opts agyOptions, blocks []acpPromptBlock, onDelta func(string) error) (agyResult, error) {
+	acpInFlight.Add(1)
+	defer acpInFlight.Add(-1)
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout(cfg))
 	defer cancel()
 

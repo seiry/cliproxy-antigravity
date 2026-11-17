@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const (
 	pluginID      = "cliproxy-antigravity"
 	providerID    = "agy"
-	pluginVersion = "0.3.1-acp.2"
+	pluginVersion = "0.3.1-acp.3"
 	schemaVersion = 6
 )
 
@@ -39,6 +40,8 @@ const (
 	methodAuthRefresh           = "auth.refresh"
 	methodHostStreamEmit        = "host.stream.emit"
 	methodHostStreamClose       = "host.stream.close"
+	methodPluginQuiesce         = "plugin.quiesce"
+	methodPluginShutdown        = "plugin.shutdown"
 )
 
 type envelope struct {
@@ -449,6 +452,17 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 
 	case methodQuotaReset:
 		return okEnvelope(quotaResetResponse{Success: false, Message: "Antigravity quota cannot be reset by the plugin; it refreshes on the schedule reported by agy"})
+
+	case methodPluginQuiesce:
+		// CLIProxyAPI is replacing this instance (hot reload): release the resident agy processes
+		// once in-flight turns finish, or they outlive the retired library.
+		drainACP(10 * time.Minute)
+		return okEnvelope(struct{}{})
+
+	case methodPluginShutdown:
+		activeProcesses.killAll()
+		closeAllACP()
+		return okEnvelope(struct{}{})
 
 	default:
 		return nil, pError("unknown_method", fmt.Sprintf("unknown plugin method %q", method), 404)

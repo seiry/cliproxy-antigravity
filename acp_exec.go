@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -173,11 +174,21 @@ func executeStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions)
 // discoverModelsACP lists models from the resident agy of the CLIProxyAPI process HOME.
 func discoverModelsACP(cfg pluginConfig) ([]modelInfo, map[string]string, error) {
 	c := anyLiveACP()
-	if c == nil || cfg.AccountHome != "" {
+	switch {
+	case cfg.AccountHome != "":
 		var err error
 		if c, err = acquireACP(cfg); err != nil {
 			return nil, nil, err
 		}
+	case c == nil:
+		// Nothing resident yet (plugin registration): list from a throwaway process instead of
+		// pooling one for the process HOME that requests with an account home would never use.
+		temp, err := startACP(cfg, "discovery")
+		if err != nil {
+			return nil, nil, err
+		}
+		defer temp.shutdown(errors.New("discovery finished"))
+		c = temp
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), acpDiscoverTimeout)
 	defer cancel()

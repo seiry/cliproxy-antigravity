@@ -11,7 +11,7 @@ import (
 const (
 	pluginID      = "cliproxy-antigravity"
 	providerID    = "agy"
-	pluginVersion = "0.3.1"
+	pluginVersion = "0.3.1-acp.1"
 	schemaVersion = 6
 )
 
@@ -298,13 +298,24 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 			return nil, err
 		}
 		opts := resolveExecutionOptions(req, cfg)
-		if _, err := buildPrompt(req.Payload, opts.ConversationID, cfg.Workdir); err != nil {
+		if useACP(cfg, opts) {
+			if _, err := buildACPBlocks(req, opts, cfg); err != nil {
+				return nil, err
+			}
+		} else if _, err := buildPrompt(req.Payload, opts.ConversationID, cfg.Workdir); err != nil {
 			return nil, err
 		}
 		if err := checkModelLimits(cfg, opts.NativeModel); err != nil {
 			return nil, err
 		}
-		go executeStream(req)
+		safeGo("executeStream", func() {
+			defer func() {
+				if r := recover(); r != nil {
+					closePluginStream(req.StreamID, pError("internal_error", fmt.Sprintf("stream panic: %v", r), http.StatusInternalServerError))
+				}
+			}()
+			executeStream(req)
+		})
 		headers := http.Header{"Content-Type": []string{"text/event-stream"}}
 		if opts.ConversationID != "" {
 			headers.Set("X-AGY-Conversation-ID", opts.ConversationID)
@@ -454,6 +465,7 @@ func pluginRegistration() registration {
 			Author:           "adeebahmad01 and contributors",
 			GitHubRepository: "https://github.com/adeebahmad01/cliproxy-antigravity",
 			ConfigFields: []configField{
+				{Name: "mode", Type: "enum", Default: defaults.Mode, EnumValues: []string{modeACP, modePrint}, Description: "acp keeps one resident agy acp process per account and opens a session per request; print runs agy -p per request (default: acp)."},
 				{Name: "binary_path", Type: "string", Default: defaults.BinaryPath, Description: "Path or command name for the official Antigravity CLI (default: agy)."},
 				{Name: "workdir", Type: "string", Default: defaults.Workdir, Description: "Working directory used when agy executes requests."},
 				{Name: "print_timeout", Type: "string", Default: defaults.PrintTimeout, Description: "Antigravity print timeout, using Go/CLI duration syntax (default: 30m)."},

@@ -69,6 +69,11 @@ func decodeChatRequest(raw []byte) (chatCompletionRequest, error) {
 }
 
 func buildPrompt(raw []byte, conversationID string, workdir string) (string, error) {
+	return buildPromptWith(raw, conversationID, workdir, nil)
+}
+
+// buildPromptWith collects images as ACP blocks when images is non-nil instead of staging files.
+func buildPromptWith(raw []byte, conversationID string, workdir string, images *[]acpPromptBlock) (string, error) {
 	req, err := decodeChatRequest(raw)
 	if err != nil {
 		return "", err
@@ -100,7 +105,7 @@ func buildPrompt(raw []byte, conversationID string, workdir string) (string, err
 
 	// For a single user message in a resumed conversation without tools, pass the content directly.
 	if convID != "" && len(messages) == 1 && (strings.TrimSpace(messages[0].Role) == "" || strings.EqualFold(strings.TrimSpace(messages[0].Role), "user")) && len(req.Tools) == 0 && messages[0].ToolCallID == "" && len(messages[0].ToolCalls) == 0 {
-		content, err := messageContentText(messages[0].Content, workdir)
+		content, err := messageContent(messages[0].Content, workdir, images)
 		if err != nil {
 			return "", pError(errorCodeRequestScoped, fmt.Sprintf("message: %v", err), http.StatusBadRequest)
 		}
@@ -118,7 +123,7 @@ func buildPrompt(raw []byte, conversationID string, workdir string) (string, err
 		if role == "" {
 			role = "user"
 		}
-		content, err := messageContentText(msg.Content, workdir)
+		content, err := messageContent(msg.Content, workdir, images)
 		if err != nil {
 			return "", pError(errorCodeRequestScoped, fmt.Sprintf("message %d: %v", i+1, err), http.StatusBadRequest)
 		}
@@ -225,6 +230,10 @@ func stageImage(dataURLOrPath string, workdir string) (string, error) {
 }
 
 func messageContentText(raw json.RawMessage, workdir string) (string, error) {
+	return messageContent(raw, workdir, nil)
+}
+
+func messageContent(raw json.RawMessage, workdir string, images *[]acpPromptBlock) (string, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return "", nil
 	}
@@ -263,7 +272,14 @@ func messageContentText(raw json.RawMessage, workdir string) (string, error) {
 				imgURL = strURL
 			}
 
-			if imgURL != "" {
+			if imgURL != "" && images != nil {
+				block, err := acpImageBlock(imgURL)
+				if err != nil {
+					return "", fmt.Errorf("image: %w", err)
+				}
+				*images = append(*images, block)
+				parts = append(parts, fmt.Sprintf("[Attached image #%d]", len(*images)))
+			} else if imgURL != "" {
 				stagedPath, err := stageImage(imgURL, workdir)
 				if err != nil {
 					return "", fmt.Errorf("staging image: %w", err)

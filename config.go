@@ -24,6 +24,7 @@ type pluginConfig struct {
 	LimitsRefreshInterval      string
 	EnforceLimits              bool
 	AccountsDir                string
+	Mode                       string
 	// AccountHome is the HOME given to agy for the account selected by CLIProxyAPI.
 	// It comes from the "home" field of the agy auth file, never from the plugin YAML.
 	AccountHome string
@@ -35,7 +36,19 @@ func defaultConfig() pluginConfig {
 		PrintTimeout:          "30m",
 		LimitsTracking:        true,
 		LimitsRefreshInterval: "1m",
+		Mode:                  modeACP,
 	}
+}
+
+const (
+	modeACP   = "acp"
+	modePrint = "print"
+)
+
+// acpSettingsChanged reports a change that the running resident agy processes cannot pick up.
+func acpSettingsChanged(a, b pluginConfig) bool {
+	return a.Mode != b.Mode || a.BinaryPath != b.BinaryPath || a.Workdir != b.Workdir ||
+		a.Sandbox != b.Sandbox || a.DangerouslySkipPermissions != b.DangerouslySkipPermissions
 }
 
 var configState = struct {
@@ -45,8 +58,12 @@ var configState = struct {
 
 func setConfig(cfg pluginConfig) {
 	configState.Lock()
+	old := configState.value
 	configState.value = cfg
 	configState.Unlock()
+	if acpSettingsChanged(old, cfg) {
+		closeAllACP()
+	}
 	invalidateModels()
 	invalidateLimits()
 }
@@ -343,6 +360,12 @@ func parsePluginConfig(raw []byte) (pluginConfig, error) {
 				return pluginConfig{}, fmt.Errorf("line %d: enforce_limits must be true or false", lineNo+1)
 			}
 			cfg.EnforceLimits = parsed
+		case "mode":
+			mode := strings.ToLower(value)
+			if mode != modeACP && mode != modePrint {
+				return pluginConfig{}, fmt.Errorf("line %d: mode must be acp or print", lineNo+1)
+			}
+			cfg.Mode = mode
 		case "accounts_dir":
 			cleaned, err := validateWorkdir(value)
 			if err != nil {

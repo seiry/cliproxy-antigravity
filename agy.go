@@ -197,7 +197,21 @@ func discoverModels(cfg pluginConfig) []modelInfo {
 		"Gemini 3.8 Flash (Low)":          "gemini-3.8-flash-low",
 	}
 
-	if err := validateBinaryPath(cfg.BinaryPath); err == nil {
+	acpDiscovered := false
+	if cfg.Mode == modeACP {
+		if discovered, mapping, err := discoverModelsACP(cfg); err == nil {
+			models = append(models, discovered...)
+			for id, native := range mapping {
+				slug := strings.TrimPrefix(id, "agy/")
+				nativeByID[id] = native
+				nativeByID[slug] = native
+				nativeByID["antigravity/"+slug] = native
+			}
+			acpDiscovered = true
+		}
+	}
+
+	if err := validateBinaryPath(cfg.BinaryPath); err == nil && !acpDiscovered {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		binPath := resolveBinaryPath(cfg.BinaryPath)
@@ -973,14 +987,19 @@ func executeNonStream(req rpcExecutorRequest) (executorResponse, error) {
 		return executorResponse{}, err
 	}
 	opts := resolveExecutionOptions(req, cfg)
-	prompt, err := buildPrompt(req.Payload, opts.ConversationID, cfg.Workdir)
-	if err != nil {
-		return executorResponse{}, err
-	}
 	if err := checkModelLimits(cfg, opts.NativeModel); err != nil {
 		return executorResponse{}, err
 	}
-	result, _, err := runAgyJSON(cfg, opts, prompt)
+	var result agyResult
+	if useACP(cfg, opts) {
+		result, err = executeNonStreamACP(req, cfg, opts)
+	} else {
+		prompt, errPrompt := buildPrompt(req.Payload, opts.ConversationID, cfg.Workdir)
+		if errPrompt != nil {
+			return executorResponse{}, errPrompt
+		}
+		result, _, err = runAgyJSON(cfg, opts, prompt)
+	}
 	if err != nil {
 		return executorResponse{}, err
 	}
@@ -1012,6 +1031,10 @@ func executeStream(req rpcExecutorRequest) {
 		return
 	}
 	opts := resolveExecutionOptions(req, cfg)
+	if useACP(cfg, opts) {
+		executeStreamACP(req, cfg, opts)
+		return
+	}
 	opts.OutputFormat = "stream-json"
 
 	prompt, err := buildPrompt(req.Payload, opts.ConversationID, cfg.Workdir)

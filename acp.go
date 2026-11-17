@@ -227,6 +227,9 @@ func startACP(cfg pluginConfig, key string) (*acpClient, error) {
 	}
 	applyAccountEnv(cmd, cfg)
 	configureSysProcAttr(cmd)
+	// The resident process outlives any request context; Cancel is only valid with CommandContext,
+	// and shutdown kills the process group itself.
+	cmd.Cancel = nil
 	stderr := &tailBuffer{max: acpStderrTailBytes}
 	cmd.Stderr = stderr
 	in, err := cmd.StdinPipe()

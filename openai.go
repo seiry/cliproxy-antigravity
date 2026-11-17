@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -338,10 +339,7 @@ func extractToolCalls(response string) ([]openAIToolCall, bool) {
 		if strings.TrimSpace(c.Name) == "" {
 			continue
 		}
-		args := string(c.Arguments)
-		if strings.TrimSpace(args) == "" || args == "null" {
-			args = "{}"
-		}
+		args := compactToolArguments(c.Arguments)
 		calls = append(calls, openAIToolCall{
 			Index: i,
 			ID:    fmt.Sprintf("call_%s_%d", newCallID(), i),
@@ -479,4 +477,26 @@ func makeSSEChunk(id string, created int64, model string, delta map[string]any, 
 	}
 	raw, _ := json.Marshal(body)
 	return append(append([]byte("data: "), raw...), []byte("\n\n")...)
+}
+
+// compactToolArguments returns the arguments as single-line JSON text. Models pretty-print the
+// block, and CLIProxyAPI embeds arguments raw when it builds Gemini SSE, so a newline there splits
+// one SSE event across lines and clients fail with "unexpected end of JSON input".
+func compactToolArguments(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return "{}"
+	}
+	if trimmed[0] == '"' {
+		var inner string
+		if json.Unmarshal(trimmed, &inner) == nil {
+			trimmed = bytes.TrimSpace([]byte(inner))
+		}
+	}
+	var out bytes.Buffer
+	if json.Compact(&out, trimmed) == nil && out.Len() > 0 {
+		return out.String()
+	}
+	encoded, _ := json.Marshal(map[string]string{"input": string(trimmed)})
+	return string(encoded)
 }

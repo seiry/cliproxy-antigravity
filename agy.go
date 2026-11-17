@@ -104,6 +104,7 @@ type catalogState struct {
 	binaryPath string
 	models     []modelInfo
 	nativeByID map[string]string
+	refreshing bool
 }
 
 var modelCatalog = catalogState{}
@@ -173,12 +174,22 @@ func standardBuiltinModels() []modelInfo {
 }
 
 func discoverModels(cfg pluginConfig) []modelInfo {
+	// routeModel reads the catalog under this lock on every request, so the slow refresh below
+	// runs unlocked; while one is in flight, callers get the previous catalog.
 	modelCatalog.Lock()
-	defer modelCatalog.Unlock()
-
-	if modelCatalog.binaryPath == cfg.BinaryPath && time.Since(modelCatalog.fetchedAt) < time.Minute && len(modelCatalog.models) > 0 {
-		return cloneModels(modelCatalog.models)
+	sameBinary := modelCatalog.binaryPath == cfg.BinaryPath && len(modelCatalog.models) > 0
+	if sameBinary && (time.Since(modelCatalog.fetchedAt) < time.Minute || modelCatalog.refreshing) {
+		models := cloneModels(modelCatalog.models)
+		modelCatalog.Unlock()
+		return models
 	}
+	modelCatalog.refreshing = true
+	modelCatalog.Unlock()
+	defer func() {
+		modelCatalog.Lock()
+		modelCatalog.refreshing = false
+		modelCatalog.Unlock()
+	}()
 
 	builtin := standardBuiltinModels()
 	models := append([]modelInfo(nil), builtin...)
@@ -256,10 +267,12 @@ func discoverModels(cfg pluginConfig) []modelInfo {
 		models[i].Name = models[i].ID
 	}
 
+	modelCatalog.Lock()
 	modelCatalog.fetchedAt = time.Now()
 	modelCatalog.binaryPath = cfg.BinaryPath
 	modelCatalog.models = models
 	modelCatalog.nativeByID = nativeByID
+	modelCatalog.Unlock()
 	return cloneModels(models)
 }
 

@@ -83,17 +83,23 @@ func buildACPBlocks(req rpcExecutorRequest, opts agyOptions, cfg pluginConfig) (
 }
 
 func executeNonStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions) (agyResult, error) {
-	blocks, err := buildACPBlocks(req, opts, cfg)
+	plan, err := planACP(req, opts, cfg)
 	if err != nil {
 		return agyResult{}, err
 	}
-	return runACP(cfg, opts, blocks, nil)
+	result, conv, err := runACP(cfg, opts, plan, nil)
+	if err != nil {
+		return agyResult{}, err
+	}
+	toolCalls, isToolCall := extractToolCalls(result.Response)
+	plan.retainConv(conv, result.Response, toolCalls, isToolCall)
+	return result, nil
 }
 
 // executeStreamACP mirrors executeStream's SSE framing, fed by ACP agent_message_chunk updates.
 func executeStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions) {
 	streamID := req.StreamID
-	blocks, err := buildACPBlocks(req, opts, cfg)
+	plan, err := planACP(req, opts, cfg)
 	if err != nil {
 		closePluginStream(streamID, err)
 		return
@@ -129,7 +135,7 @@ func executeStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions)
 		return emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{"content": pending}, nil, nil, ""))
 	}
 
-	result, err := runACP(cfg, opts, blocks, onDelta)
+	result, conv, err := runACP(cfg, opts, plan, onDelta)
 	if err == errACPClientGone {
 		return
 	}
@@ -139,7 +145,10 @@ func executeStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions)
 	}
 
 	fullResponse := nonEmpty(result.Response, streamed.String())
-	if toolCalls, isToolCall := extractToolCalls(fullResponse); opts.HasTools && isToolCall {
+	toolCalls, isToolCall := extractToolCalls(fullResponse)
+	isToolCall = isToolCall && opts.HasTools
+	plan.retainConv(conv, fullResponse, toolCalls, isToolCall)
+	if isToolCall {
 		_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{"tool_calls": toolCalls}, nil, nil, ""))
 		finish := "tool_calls"
 		_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, &finish, nil, ""))

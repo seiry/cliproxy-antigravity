@@ -105,6 +105,8 @@ def main():
     ap.add_argument("--key-file", required=True)
     ap.add_argument("--container", required=True)
     ap.add_argument("--report", default="e2e-report.json")
+    ap.add_argument("--no-kill", action="store_true", help="skip killing the resident agy (live traffic)")
+    ap.add_argument("--only-cache", action="store_true", help="run only warmup and the cache steps")
     a = ap.parse_args()
     cli = Client(a.base, open(a.key_file).read().strip())
     report = {"model": MODEL, "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "steps": []}
@@ -123,6 +125,56 @@ def main():
         cli.chat([{"role": "user", "content": "Reply with just: ready"}])))
     baseline = agy_pids(a.container)
     report["resident_pids_at_start"] = baseline
+
+    reference = " ".join(f"Entry {i}: the archive keeper filed ledger {i * 7} under shelf {i % 13}." for i in range(260))
+
+    def cached(usage):
+        return ((usage or {}).get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+
+    def openai_cache():
+        msgs = [{"role": "system", "content": "You are a terse archive assistant."},
+                {"role": "user", "content": reference + "\n\nWhich shelf holds ledger 70? Reply with just the number."}]
+        turns = []
+        for follow in ["Which shelf holds ledger 140? Reply with just the number.",
+                       "Which shelf holds ledger 210? Reply with just the number.", None]:
+            body, lat = cli.chat(msgs)
+            reply = body["choices"][0]["message"].get("content") or ""
+            u = body.get("usage") or {}
+            turns.append({"latency_s": round(lat, 2), "prompt_tokens": u.get("prompt_tokens"), "cached": cached(u), "reply": reply.strip()[:20]})
+            if follow is None:
+                break
+            msgs += [{"role": "assistant", "content": reply}, {"role": "user", "content": follow}]
+        ok = turns[0]["cached"] == 0 and all(t["cached"] > 0 for t in turns[1:])
+        return ok, {"turns": turns}
+    step("multi-turn OpenAI chat reuses the session (cached tokens on turns 2-3)", openai_cache)
+
+    def gemini_cache():
+        url = cli.base + "/v1beta/models/" + MODEL + ":generateContent"
+        contents = [{"role": "user", "parts": [{"text": reference + "\n\nWhich shelf holds ledger 77? Reply with just the number."}]}]
+        turns = []
+        for follow in ["And ledger 154? Reply with just the number.", None]:
+            req = urllib.request.Request(url, data=json.dumps({"contents": contents}).encode(),
+                                         headers={"x-goog-api-key": cli.key, "Content-Type": "application/json"})
+            t0 = time.time()
+            with urllib.request.urlopen(req, timeout=180) as r:
+                body = json.load(r)
+            cand = body["candidates"][0]["content"]
+            meta = body.get("usageMetadata") or {}
+            turns.append({"latency_s": round(time.time() - t0, 2), "usageMetadata": meta,
+                          "reply": "".join(p.get("text", "") for p in cand.get("parts", [])).strip()[:20]})
+            if follow is None:
+                break
+            contents += [cand, {"role": "user", "parts": [{"text": follow}]}]
+        second = turns[1]["usageMetadata"]
+        ok = (second.get("cachedContentTokenCount") or 0) > 0
+        return ok, {"turns": turns}
+    step("multi-turn Gemini-native chat reuses the session", gemini_cache)
+    if a.only_cache:
+        report["passed"] = all(s["ok"] for s in report["steps"])
+        with open(a.report, "w") as f:
+            json.dump(report, f, indent=2)
+        print("report:", a.report, "passed:", report["passed"])
+        sys.exit(0 if report["passed"] else 1)
 
     def concurrent_streams():
         prompts = ["List the numbers 1 to 30 separated by commas, nothing else.",
@@ -184,6 +236,8 @@ def main():
     step("image sent as an ACP block", image_block)
 
     def crash_recovery():
+        if a.no_kill:
+            return True, {"skipped": "--no-kill"}
         before = agy_pids(a.container)
         subprocess.run(["docker", "exec", a.container, "sh", "-c", "kill -9 " + " ".join(map(str, before))], check=True)
         time.sleep(1)

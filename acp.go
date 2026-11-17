@@ -212,6 +212,7 @@ func closeAllACP() {
 	clients := acpPool.clients
 	acpPool.clients = map[string]*acpClient{}
 	acpPool.Unlock()
+	dropAllConvs()
 	for _, c := range clients {
 		c.shutdown(errors.New("agy acp pool closed"))
 	}
@@ -604,12 +605,14 @@ func acpUsageToAgy(raw json.RawMessage) agyUsage {
 		TotalTokens      int `json:"totalTokens"`
 	}
 	_ = json.Unmarshal(raw, &u)
+	// ACP inputTokens excludes cache reads; OpenAI prompt_tokens counts them (cached_tokens is a subset).
+	input := u.InputTokens + u.CachedReadTokens
 	return agyUsage{
-		InputTokens:     u.InputTokens,
+		InputTokens:     input,
 		OutputTokens:    u.OutputTokens,
 		ThinkingTokens:  u.ThoughtTokens,
 		CacheReadTokens: u.CachedReadTokens,
-		TotalTokens:     u.TotalTokens,
+		TotalTokens:     input + u.OutputTokens,
 	}
 }
 
@@ -630,7 +633,7 @@ func drainACP(limit time.Duration) {
 
 // runACP executes one prompt on the resident agy for cfg's account. onDelta, when set, receives
 // assistant text as it streams; returning an error from it cancels the ACP turn.
-func runACP(cfg pluginConfig, opts agyOptions, blocks []acpPromptBlock, onDelta func(string) error) (agyResult, error) {
+func runACP(cfg pluginConfig, opts agyOptions, plan acpPlan, onDelta func(string) error) (agyResult, *acpConv, error) {
 	acpInFlight.Add(1)
 	defer acpInFlight.Add(-1)
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout(cfg))
@@ -644,41 +647,69 @@ func runACP(cfg pluginConfig, opts agyOptions, blocks []acpPromptBlock, onDelta 
 		}
 		return onDelta(text)
 	}
-	result, err, retryable := runACPOnce(ctx, cfg, opts, blocks, wrapped)
-	if err != nil && retryable && !emitted && ctx.Err() == nil {
-		result, err, _ = runACPOnce(ctx, cfg, opts, blocks, wrapped)
+	blocks, reuse := plan.full, (*acpConv)(nil)
+	if plan.reuse != nil {
+		blocks, reuse = plan.follow, plan.reuse
 	}
-	return result, err
+	result, conv, err, retryable := runACPOnce(ctx, cfg, opts, blocks, wrapped, reuse)
+	// A reused session that is gone (agy restarted, session evicted) is replayed in full, as is a
+	// fresh session whose resident died; both only before any text reached the client.
+	if err != nil && !emitted && ctx.Err() == nil && (retryable || (reuse != nil && sessionGone(err))) {
+		result, conv, err, _ = runACPOnce(ctx, cfg, opts, plan.full, wrapped, nil)
+	}
+	return result, conv, err
 }
 
-// runACPOnce reports retryable=true only when the resident process died under the request.
-func runACPOnce(ctx context.Context, cfg pluginConfig, opts agyOptions, blocks []acpPromptBlock, onDelta func(string) error) (agyResult, error, bool) {
-	c, err := acquireACP(cfg)
-	if err != nil {
-		return agyResult{}, err, false
-	}
-	cwd := cfg.Workdir
-	if cwd == "" {
-		cwd = "."
-	}
-	info, err := c.newSession(ctx, cwd)
-	if err != nil {
-		return agyResult{}, c.wrapErr(err), !c.alive()
-	}
-	sessionID := info.SessionID
-	sink := c.register(sessionID)
-	defer c.closeSession(sessionID)
+func sessionGone(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "session") && (strings.Contains(msg, "not found") || strings.Contains(msg, "unknown") || strings.Contains(msg, "no such"))
+}
 
-	if model := acpModelChoice(opts, info.modelSet()); model != "" {
-		if _, err := c.call(ctx, "session/set_model", map[string]any{"sessionId": sessionID, "modelId": model}); err != nil {
-			var rpcErr *acpRPCError
-			if errors.As(err, &rpcErr) {
-				return agyResult{}, pError(errorCodeModelNotFound, "Antigravity model not available: "+model+" ("+rpcErr.Message+")", http.StatusNotFound), false
+// runACPOnce runs one turn on reuse's session, or on a fresh one when reuse is nil. A successful turn
+// leaves the session open and returns it for the caller to retain; a failed one closes it.
+// retryable=true only when the resident process died under the request.
+func runACPOnce(ctx context.Context, cfg pluginConfig, opts agyOptions, blocks []acpPromptBlock, onDelta func(string) error, reuse *acpConv) (agyResult, *acpConv, error, bool) {
+	var c *acpClient
+	var sessionID string
+	if reuse != nil {
+		c, sessionID = reuse.client, reuse.sessionID
+		if !c.alive() {
+			return agyResult{}, nil, errors.New("resident agy of the reused session exited"), true
+		}
+	} else {
+		var err error
+		if c, err = acquireACP(cfg); err != nil {
+			return agyResult{}, nil, err, false
+		}
+		info, err := c.newSession(ctx, nonEmpty(cfg.Workdir, "."))
+		if err != nil {
+			return agyResult{}, nil, c.wrapErr(err), !c.alive()
+		}
+		sessionID = info.SessionID
+		if model := acpModelChoice(opts, info.modelSet()); model != "" {
+			if _, err := c.call(ctx, "session/set_model", map[string]any{"sessionId": sessionID, "modelId": model}); err != nil {
+				c.closeSession(sessionID)
+				var rpcErr *acpRPCError
+				if errors.As(err, &rpcErr) {
+					return agyResult{}, nil, pError(errorCodeModelNotFound, "Antigravity model not available: "+model+" ("+rpcErr.Message+")", http.StatusNotFound), false
+				}
+				return agyResult{}, nil, c.wrapErr(err), !c.alive()
 			}
-			return agyResult{}, c.wrapErr(err), !c.alive()
 		}
 	}
 
+	sink := c.register(sessionID)
+	result, err, retryable := runACPTurn(ctx, c, sessionID, sink, blocks, onDelta)
+	if err != nil {
+		c.closeSession(sessionID)
+		return result, nil, err, retryable
+	}
+	c.unregister(sessionID)
+	return result, &acpConv{client: c, sessionID: sessionID}, nil, false
+}
+
+// runACPTurn sends one prompt on an open session and streams its reply through onDelta.
+func runACPTurn(ctx context.Context, c *acpClient, sessionID string, sink *acpSink, blocks []acpPromptBlock, onDelta func(string) error) (agyResult, error, bool) {
 	done := make(chan acpPromptOutcome, 1)
 	go func() {
 		defer func() {

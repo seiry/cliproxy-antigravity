@@ -111,13 +111,13 @@ func planACP(req rpcExecutorRequest, opts agyOptions, cfg pluginConfig) (acpPlan
 	plan := acpPlan{full: full, scope: convScope(cfg, opts), tools: chatReq.Tools, messages: chatReq.Messages, debug: cfg.ConvDebugFile}
 	last := lastAssistantIndex(chatReq.Messages)
 	if last < 0 || last == len(chatReq.Messages)-1 {
-		convDebug(plan.debug, map[string]any{"event": "lookup", "skip": "no assistant turn", "n": len(chatReq.Messages)})
+		convDebug(plan.debug, map[string]any{"event": "lookup", "skip": "no assistant turn", "n": len(chatReq.Messages), "src": req.SourceFormat})
 		return plan, nil
 	}
 	key := convKey(plan.scope, plan.tools, chatReq.Messages[:last+1])
 	conv := takeConv(key)
 	convDebug(plan.debug, map[string]any{"event": "lookup", "key": key[:12], "hit": conv != nil, "n": len(chatReq.Messages),
-		"tools": len(chatReq.Tools), "scope": plan.scope, "msgs": describeMessages(chatReq.Messages[:last+1])})
+		"tools": len(chatReq.Tools), "scope": plan.scope, "src": req.SourceFormat, "msgs": describeMessages(chatReq.Messages[:last+1])})
 	if conv == nil {
 		return plan, nil
 	}

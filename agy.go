@@ -1216,7 +1216,7 @@ func executeStream(req rpcExecutorRequest) {
 		// The finish chunk and the usage chunk must stay separate: a usage chunk has empty choices.
 		finishReason := "tool_calls"
 		_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, &finishReason, nil, conversationID))
-		if requestWantsUsage(req.Payload) {
+		if streamWantsUsage(req) {
 			_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, nil, openAIUsage(terminal.Usage), conversationID))
 		}
 		_ = emitPluginStreamChunk(streamID, []byte("data: [DONE]\n\n"))
@@ -1238,7 +1238,7 @@ func executeStream(req rpcExecutorRequest) {
 	if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, &finish, nil, conversationID)); err != nil {
 		return
 	}
-	if requestWantsUsage(req.Payload) {
+	if streamWantsUsage(req) {
 		if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, nil, openAIUsage(terminal.Usage), conversationID)); err != nil {
 			return
 		}

@@ -152,7 +152,7 @@ func executeStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions)
 		_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{"tool_calls": toolCalls}, nil, nil, ""))
 		finish := "tool_calls"
 		_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, &finish, nil, ""))
-		if requestWantsUsage(req.Payload) {
+		if streamWantsUsage(req) {
 			_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, nil, openAIUsage(result.Usage), ""))
 		}
 		_ = emitPluginStreamChunk(streamID, []byte("data: [DONE]\n\n"))
@@ -169,7 +169,7 @@ func executeStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions)
 	if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, &finish, nil, "")); err != nil {
 		return
 	}
-	if requestWantsUsage(req.Payload) {
+	if streamWantsUsage(req) {
 		if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, nil, openAIUsage(result.Usage), "")); err != nil {
 			return
 		}

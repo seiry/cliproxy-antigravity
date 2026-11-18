@@ -12,6 +12,7 @@ every step's timing and verdict; the exit code is non-zero when any step fails.
 import argparse
 import base64
 import json
+import os
 import struct
 import subprocess
 import sys
@@ -107,6 +108,7 @@ def main():
     ap.add_argument("--report", default="e2e-report.json")
     ap.add_argument("--no-kill", action="store_true", help="skip killing the resident agy (live traffic)")
     ap.add_argument("--only-cache", action="store_true", help="run only warmup and the cache steps")
+    ap.add_argument("--only-media", action="store_true", help="run only warmup and the media step")
     a = ap.parse_args()
     cli = Client(a.base, open(a.key_file).read().strip())
     report = {"model": MODEL, "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "steps": []}
@@ -125,6 +127,35 @@ def main():
         cli.chat([{"role": "user", "content": "Reply with just: ready"}])))
     baseline = agy_pids(a.container)
     report["resident_pids_at_start"] = baseline
+
+    def media_attachments():
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "testdata")
+        cases = [
+            ("clip.m4a", "audio/mp4", "What is the secret word spoken in the attached audio? Reply with just the word.", "pineapple"),
+            ("doc.pdf", "application/pdf", "What is the secret number in the attached PDF? Reply with just the number.", "4721"),
+            ("clip.mp4", "video/mp4", "What colour is the attached video? Reply with just the colour.", "blue"),
+        ]
+        url = cli.base + "/v1beta/models/" + MODEL + ":generateContent"
+        results, ok = [], True
+        for name, mime, question, expect in cases:
+            data = base64.b64encode(open(os.path.join(here, name), "rb").read()).decode()
+            body = {"contents": [{"role": "user", "parts": [{"text": question}, {"inlineData": {"mimeType": mime, "data": data}}]}]}
+            req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                         headers={"x-goog-api-key": cli.key, "Content-Type": "application/json"})
+            t0 = time.time()
+            with urllib.request.urlopen(req, timeout=180) as r:
+                reply = "".join(p.get("text", "") for p in json.load(r)["candidates"][0]["content"].get("parts", []))
+            hit = expect in reply.lower()
+            ok = ok and hit
+            results.append({"file": name, "expect": expect, "reply": reply.strip()[:60], "ok": hit, "latency_s": round(time.time() - t0, 2)})
+        return ok, {"cases": results}
+    if a.only_media:
+        step("Gemini inlineData audio, PDF and video reach the model", media_attachments)
+        report["passed"] = all(s["ok"] for s in report["steps"])
+        with open(a.report, "w") as f:
+            json.dump(report, f, indent=2)
+        print("report:", a.report, "passed:", report["passed"])
+        sys.exit(0 if report["passed"] else 1)
 
     reference = " ".join(f"Entry {i}: the archive keeper filed ledger {i * 7} under shelf {i % 13}." for i in range(260))
 

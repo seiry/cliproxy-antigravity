@@ -287,6 +287,16 @@ func messageContent(raw json.RawMessage, workdir string, images *[]acpPromptBloc
 				}
 				parts = append(parts, fmt.Sprintf("[Attached image: %s (inspect this image file to answer the request)]", stagedPath))
 			}
+		case "input_audio", "video_url", "input_video", "file", "input_file":
+			if images == nil {
+				continue
+			}
+			link, label, err := acpMediaBlock(block, workdir)
+			if err != nil {
+				return "", fmt.Errorf("%s: %w", kind, err)
+			}
+			*images = append(*images, link)
+			parts = append(parts, fmt.Sprintf("[Attached %s #%d: %s]", label, len(*images), link["name"]))
 		default:
 			if text, ok := block["text"].(string); ok && text != "" {
 				parts = append(parts, text)

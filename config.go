@@ -25,6 +25,7 @@ type pluginConfig struct {
 	EnforceLimits              bool
 	AccountsDir                string
 	Mode                       string
+	ConvDebugFile              string
 	// AccountHome is the HOME given to agy for the account selected by CLIProxyAPI.
 	// It comes from the "home" field of the agy auth file, never from the plugin YAML.
 	AccountHome string
@@ -360,6 +361,8 @@ func parsePluginConfig(raw []byte) (pluginConfig, error) {
 				return pluginConfig{}, fmt.Errorf("line %d: enforce_limits must be true or false", lineNo+1)
 			}
 			cfg.EnforceLimits = parsed
+		case "conv_debug_file":
+			cfg.ConvDebugFile = expandHome(value)
 		case "mode":
 			mode := strings.ToLower(value)
 			if mode != modeACP && mode != modePrint {

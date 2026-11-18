@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -91,6 +92,7 @@ type acpPlan struct {
 	scope    string
 	tools    []json.RawMessage
 	messages []chatMessage
+	debug    string
 }
 
 func convScope(cfg pluginConfig, opts agyOptions) string {
@@ -106,12 +108,16 @@ func planACP(req rpcExecutorRequest, opts agyOptions, cfg pluginConfig) (acpPlan
 	if err != nil {
 		return acpPlan{}, err
 	}
-	plan := acpPlan{full: full, scope: convScope(cfg, opts), tools: chatReq.Tools, messages: chatReq.Messages}
+	plan := acpPlan{full: full, scope: convScope(cfg, opts), tools: chatReq.Tools, messages: chatReq.Messages, debug: cfg.ConvDebugFile}
 	last := lastAssistantIndex(chatReq.Messages)
 	if last < 0 || last == len(chatReq.Messages)-1 {
+		convDebug(plan.debug, map[string]any{"event": "lookup", "skip": "no assistant turn", "n": len(chatReq.Messages)})
 		return plan, nil
 	}
-	conv := takeConv(convKey(plan.scope, plan.tools, chatReq.Messages[:last+1]))
+	key := convKey(plan.scope, plan.tools, chatReq.Messages[:last+1])
+	conv := takeConv(key)
+	convDebug(plan.debug, map[string]any{"event": "lookup", "key": key[:12], "hit": conv != nil, "n": len(chatReq.Messages),
+		"tools": len(chatReq.Tools), "scope": plan.scope, "msgs": describeMessages(chatReq.Messages[:last+1])})
 	if conv == nil {
 		return plan, nil
 	}
@@ -139,7 +145,10 @@ func (p acpPlan) retainConv(conv *acpConv, reply string, toolCalls []openAIToolC
 		assistant.Content, _ = json.Marshal(reply)
 	}
 	history := append(append([]chatMessage(nil), p.messages...), assistant)
-	putConv(convKey(p.scope, p.tools, history), conv)
+	key := convKey(p.scope, p.tools, history)
+	convDebug(p.debug, map[string]any{"event": "store", "key": key[:12], "n": len(history), "tools": len(p.tools),
+		"scope": p.scope, "msgs": describeMessages(history)})
+	putConv(key, conv)
 }
 
 func lastAssistantIndex(messages []chatMessage) int {
@@ -194,7 +203,7 @@ func convKey(scope string, tools []json.RawMessage, messages []chatMessage) stri
 	write("\x1e")
 	for _, m := range messages {
 		write(canonRole(m.Role))
-		write(strings.Join(strings.Fields(canonContent(m.Content)), " "))
+		write(canonText(m.Content))
 		for _, call := range canonToolCalls(m.ToolCalls) {
 			write(call)
 		}
@@ -236,7 +245,13 @@ func canonContent(raw json.RawMessage) string {
 		sum := sha256.Sum256(encoded)
 		parts = append(parts, "[block "+hex.EncodeToString(sum[:8])+"]")
 	}
-	return strings.Join(parts, "\n")
+	return strings.Join(parts, "")
+}
+
+// canonText drops all whitespace: streamed replies come back split into parts at arbitrary points,
+// sometimes mid-word, so only the non-space characters are stable.
+func canonText(raw json.RawMessage) string {
+	return strings.Join(strings.Fields(canonContent(raw)), "")
 }
 
 func canonToolCalls(raw json.RawMessage) []string {
@@ -268,4 +283,55 @@ func canonJSON(raw json.RawMessage) string {
 	}
 	out, _ := json.Marshal(v)
 	return string(out)
+}
+
+var convDebugMu sync.Mutex
+
+// convDebug appends one JSON line when conv_debug_file is set; it holds message excerpts, so it is
+// meant for short troubleshooting sessions only.
+func convDebug(path string, event map[string]any) {
+	if path == "" {
+		return
+	}
+	event["time"] = time.Now().Format(time.RFC3339Nano)
+	line, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	convDebugMu.Lock()
+	defer convDebugMu.Unlock()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(line, '\n'))
+}
+
+func describeMessages(messages []chatMessage) []map[string]any {
+	out := make([]map[string]any, 0, len(messages))
+	for _, m := range messages {
+		text := canonText(m.Content)
+		calls := strings.Join(canonToolCalls(m.ToolCalls), ";")
+		sum := sha256.Sum256([]byte(canonRole(m.Role) + "\x00" + text + "\x00" + calls))
+		head, tail := text, ""
+		if len(text) > 80 {
+			head, tail = text[:80], text[len(text)-40:]
+		}
+		entry := map[string]any{"role": canonRole(m.Role), "sha": hex.EncodeToString(sum[:6]), "len": len(text), "head": head}
+		if tail != "" {
+			entry["tail"] = tail
+		}
+		if calls != "" {
+			if len(calls) > 160 {
+				calls = calls[:160]
+			}
+			entry["calls"] = calls
+		}
+		if len(m.Content) > 0 && m.Content[0] == '[' {
+			entry["blocks"] = true
+		}
+		out = append(out, entry)
+	}
+	return out
 }

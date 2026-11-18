@@ -365,16 +365,12 @@ func newCallID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
-// streamWantsUsage reports whether a stream should end with a usage chunk. OpenAI chat clients ask with
-// stream_options.include_usage; Gemini, Claude and Responses streams always carry usage, and CLIProxyAPI
-// only fills it (with cached tokens) when the chat-completions stream it translates from has one.
+// streamWantsUsage reports whether a stream ends with a usage chunk: always. CLIProxyAPI hands every
+// request over as chat-completions (SourceFormat "openai" even for Gemini clients) without
+// stream_options.include_usage, and only fills Gemini usageMetadata (with cached tokens) from this chunk.
 func streamWantsUsage(req rpcExecutorRequest) bool {
-	switch strings.ToLower(strings.TrimSpace(req.SourceFormat)) {
-	case "", "openai", "chat-completions", "openai-chat":
-		return requestWantsUsage(req.Payload)
-	default:
-		return true
-	}
+	_ = req
+	return true
 }
 
 func requestWantsUsage(raw []byte) bool {

@@ -47,11 +47,11 @@ Google Antigravity
 - Antigravity token usage mapped to OpenAI-compatible usage fields
 - No Antigravity OAuth/token extraction
 - No direct calls to private Antigravity services
-- No fake CLIProxyAPI Antigravity credential: the plugin's `model_router` capability sends its models straight to its own executor, so no auth file is needed
+- No Antigravity credential is stored: an `agy` auth file only points at an account home (`home`), where the official CLI keeps its own login
 
 The plugin registers under the provider key **`agy`**, and supports requests addressed to `agy/*`, `antigravity/*`, or unprefixed models.
 
-Because `agy` manages its own login, CLIProxyAPI has no auth record to schedule for these models. The plugin therefore routes `agy/*` models, its published unprefixed models, and `antigravity/*` models (only while CLIProxyAPI's built-in Antigravity provider has no credentials) to itself. If you do add an auth record with provider `agy`, routing is left to CLIProxyAPI's normal credential path. Requests can arrive through any CLIProxyAPI entry protocol (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`); the host translates them to Chat Completions for the plugin.
+Requests are served through an enabled `agy` auth file in CLIProxyAPI's auth-dir (`type: agy`, `disabled` absent or false, `home` pointing at a signed-in account home). Without one, CLIProxyAPI lists no agy models and `agy/*` requests fail with `unknown provider`. Models are registered per auth: each enabled auth publishes the models its own account sees, so enabling or disabling an auth file in the panel switches the listed models and the account that serves requests. If discovery fails for an account, its previous models stay registered and are refreshed on the next auth change or plugin reload. Requests can arrive through any CLIProxyAPI entry protocol (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`); the host translates them to Chat Completions for the plugin.
 
 ## Requirements & Platform Support
 

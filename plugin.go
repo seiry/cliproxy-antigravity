@@ -21,6 +21,7 @@ const (
 	methodPluginReconfigure     = "plugin.reconfigure"
 	methodModelRegister         = "model.register"
 	methodModelStatic           = "model.static"
+	methodModelForAuth          = "model.for_auth"
 	methodModelRoute            = "model.route"
 	methodExecutorIdentifier    = "executor.identifier"
 	methodExecutorExecute       = "executor.execute"
@@ -161,6 +162,13 @@ type modelResponse struct {
 	Models   []modelInfo `json:"Models"`
 }
 
+type authModelRequest struct {
+	AuthID       string
+	AuthProvider string
+	Metadata     map[string]any
+	Host         hostConfigSummary
+}
+
 type modelInfo struct {
 	ID                         string   `json:"ID"`
 	Object                     string   `json:"Object"`
@@ -187,12 +195,6 @@ type rpcExecutorRequest struct {
 	Metadata        map[string]any
 	StreamID        string `json:"stream_id,omitempty"`
 	HostCallbackID  string `json:"host_callback_id,omitempty"`
-}
-
-// modelRouteRequest is the subset of pluginapi.ModelRouteRequest the router needs.
-type modelRouteRequest struct {
-	RequestedModel     string
-	AvailableProviders []string
 }
 
 type modelRouteResponse struct {
@@ -260,19 +262,30 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return okEnvelope(pluginRegistration())
 
 	case methodModelRegister:
-		models := discoverModels(currentConfig())
-		return okEnvelope(modelRegistrationResponse{Provider: providerID, Models: models})
+		return okEnvelope(modelRegistrationResponse{Provider: providerID, Models: cachedEnabledModels(currentConfig())})
 
 	case methodModelStatic:
-		models := discoverModels(currentConfig())
-		return okEnvelope(modelResponse{Provider: providerID, Models: models})
+		return okEnvelope(modelResponse{Provider: providerID, Models: cachedEnabledModels(currentConfig())})
+
+	case methodModelForAuth:
+		var req authModelRequest
+		if err := json.Unmarshal(request, &req); err != nil {
+			return nil, pError("invalid_request", "could not decode auth model request: "+err.Error(), 400)
+		}
+		rememberAuthDir(req.Host.AuthDir)
+		cfg, err := withAccount(currentConfig(), req.Metadata)
+		if err != nil {
+			return nil, err
+		}
+		models, _, ok := loadCatalog(cfg)
+		if !ok {
+			return nil, pRetryableError("agy_model_discovery_failed", "agy listed no models for "+nonEmpty(cfg.AccountHome, "the process home"), http.StatusServiceUnavailable)
+		}
+		reconcileAccounts()
+		return okEnvelope(modelResponse{Provider: providerID, Models: cloneModels(models)})
 
 	case methodModelRoute:
-		var req modelRouteRequest
-		if err := json.Unmarshal(request, &req); err != nil {
-			return nil, pError("invalid_request", "could not decode model route request: "+err.Error(), 400)
-		}
-		return okEnvelope(routeModel(req))
+		return okEnvelope(modelRouteResponse{})
 
 	case methodExecutorIdentifier:
 		return okEnvelope(identifierResponse{Identifier: providerID})
@@ -332,7 +345,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 			return nil, pError("invalid_request", "could not decode count-tokens request: "+err.Error(), 400)
 		}
 		cfg := currentConfig()
-		opts := resolveExecutionOptions(req, cfg)
+		opts, _ := parseExecutionOptions(req, cfg)
 		prompt, err := buildPrompt(req.Payload, opts.ConversationID, cfg.Workdir)
 		if err != nil {
 			return nil, err
@@ -417,6 +430,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 			return nil, pError("invalid_request", "could not decode auth parse request: "+err.Error(), 400)
 		}
 		rememberAuthDir(req.Host.AuthDir)
+		reconcileAccounts()
 		return okEnvelope(parseAgyAuth(req))
 
 	case methodAuthLoginStart:
@@ -495,9 +509,9 @@ func pluginRegistration() registration {
 		Capabilities: registrationCapability{
 			ModelRegistrar:        true,
 			ModelProvider:         true,
-			ModelRouter:           true,
+			ModelRouter:           false,
 			Executor:              true,
-			ExecutorModelScope:    "static",
+			ExecutorModelScope:    "oauth",
 			ExecutorInputFormats:  []string{"chat-completions"},
 			ExecutorOutputFormats: []string{"chat-completions"},
 			ManagementAPI:         true,

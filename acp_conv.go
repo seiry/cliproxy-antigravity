@@ -12,10 +12,8 @@ import (
 	"time"
 )
 
-// Session reuse. Chat clients resend the whole transcript every turn, while Antigravity only hits its
-// prompt cache inside one session (a fresh session with an identical prompt reads 0 cached tokens).
-// After a turn the session stays open, keyed by a fingerprint of the transcript the client will send
-// back; the next request whose history matches continues it with only the new messages.
+// Session reuse: Antigravity only hits its prompt cache inside one session, so a finished turn stays
+// open under a fingerprint of the transcript the client will resend and the next turn continues it.
 
 const (
 	acpConvIdleTTL = 30 * time.Minute
@@ -135,6 +133,10 @@ func planACP(req rpcExecutorRequest, opts agyOptions, cfg pluginConfig) (acpPlan
 // retainConv keeps a finished turn's session for the request that will carry this reply as history.
 func (p acpPlan) retainConv(conv *acpConv, reply string, toolCalls []openAIToolCall, isToolCall bool) {
 	if conv == nil {
+		return
+	}
+	if !isToolCall && strings.TrimSpace(reply) == "" {
+		safeGo("closeConv", func() { conv.client.closeSession(conv.sessionID) })
 		return
 	}
 	assistant := chatMessage{Role: "assistant"}

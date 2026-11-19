@@ -111,6 +111,8 @@ func (m acpModelSet) has(id string) bool {
 
 type acpClient struct {
 	key  string
+	home string
+	busy atomic.Int64
 	cmd  *exec.Cmd
 	in   io.WriteCloser
 	wmu  sync.Mutex
@@ -150,10 +152,17 @@ func (t *tailBuffer) String() string {
 	return string(t.buf)
 }
 
+type acpStart struct {
+	done   chan struct{}
+	client *acpClient
+	err    error
+}
+
 var acpPool = struct {
 	sync.Mutex
-	clients map[string]*acpClient
-}{clients: map[string]*acpClient{}}
+	clients  map[string]*acpClient
+	starting map[string]*acpStart
+}{clients: map[string]*acpClient{}, starting: map[string]*acpStart{}}
 
 func acpArgs(cfg pluginConfig) []string {
 	args := []string{"acp"}
@@ -174,26 +183,60 @@ func acpPoolKey(cfg pluginConfig) string {
 func acquireACP(cfg pluginConfig) (*acpClient, error) {
 	key := acpPoolKey(cfg)
 	acpPool.Lock()
-	defer acpPool.Unlock()
 	if c := acpPool.clients[key]; c != nil && c.alive() {
+		acpPool.Unlock()
 		return c, nil
 	}
-	c, err := startACP(cfg, key)
-	if err != nil {
-		return nil, err
+	if pending := acpPool.starting[key]; pending != nil {
+		acpPool.Unlock()
+		<-pending.done
+		return pending.client, pending.err
 	}
-	acpPool.clients[key] = c
-	return c, nil
+	pending := &acpStart{done: make(chan struct{})}
+	acpPool.starting[key] = pending
+	acpPool.Unlock()
+
+	defer func() {
+		acpPool.Lock()
+		delete(acpPool.starting, key)
+		if pending.err == nil {
+			acpPool.clients[key] = pending.client
+		}
+		acpPool.Unlock()
+		close(pending.done)
+	}()
+	pending.err = errors.New("agy acp start aborted")
+	pending.client, pending.err = startACP(cfg, key)
+	return pending.client, pending.err
 }
 
-// anyLiveACP returns a running client, so model discovery does not start a second agy per account.
-func anyLiveACP() *acpClient {
+// retireACPExcept closes the residents of homes outside keep once their turns finish.
+func retireACPExcept(keep map[string]bool) {
+	var retired []*acpClient
+	acpPool.Lock()
+	for key, c := range acpPool.clients {
+		if !keep[c.home] {
+			delete(acpPool.clients, key)
+			retired = append(retired, c)
+		}
+	}
+	acpPool.Unlock()
+	for _, c := range retired {
+		safeGo("retireACP", func() {
+			for c.busy.Load() > 0 {
+				time.Sleep(time.Second)
+			}
+			c.shutdown(errors.New("agy acp account disabled"))
+		})
+	}
+}
+
+// livePooledACP returns the running resident for cfg's account, or nil when there is none.
+func livePooledACP(cfg pluginConfig) *acpClient {
 	acpPool.Lock()
 	defer acpPool.Unlock()
-	for _, c := range acpPool.clients {
-		if c.alive() {
-			return c
-		}
+	if c := acpPool.clients[acpPoolKey(cfg)]; c != nil && c.alive() {
+		return c
 	}
 	return nil
 }
@@ -246,6 +289,7 @@ func startACP(cfg pluginConfig, key string) (*acpClient, error) {
 	}
 	c := &acpClient{
 		key:             key,
+		home:            cfg.AccountHome,
 		cmd:             cmd,
 		in:              in,
 		pending:         map[int64]chan acpReply{},
@@ -665,14 +709,15 @@ func sessionGone(err error) bool {
 	return strings.Contains(msg, "session") && (strings.Contains(msg, "not found") || strings.Contains(msg, "unknown") || strings.Contains(msg, "no such"))
 }
 
-// runACPOnce runs one turn on reuse's session, or on a fresh one when reuse is nil. A successful turn
-// leaves the session open and returns it for the caller to retain; a failed one closes it.
-// retryable=true only when the resident process died under the request.
+// runACPOnce runs one turn on reuse's session, or a fresh one. A successful turn leaves the session
+// open for the caller to retain; retryable=true only when the resident died under the request.
 func runACPOnce(ctx context.Context, cfg pluginConfig, opts agyOptions, blocks []acpPromptBlock, onDelta func(string) error, reuse *acpConv) (agyResult, *acpConv, error, bool) {
 	var c *acpClient
 	var sessionID string
 	if reuse != nil {
 		c, sessionID = reuse.client, reuse.sessionID
+		c.busy.Add(1)
+		defer c.busy.Add(-1)
 		if !c.alive() {
 			return agyResult{}, nil, errors.New("resident agy of the reused session exited"), true
 		}
@@ -681,6 +726,8 @@ func runACPOnce(ctx context.Context, cfg pluginConfig, opts agyOptions, blocks [
 		if c, err = acquireACP(cfg); err != nil {
 			return agyResult{}, nil, err, false
 		}
+		c.busy.Add(1)
+		defer c.busy.Add(-1)
 		info, err := c.newSession(ctx, nonEmpty(cfg.Workdir, "."))
 		if err != nil {
 			return agyResult{}, nil, c.wrapErr(err), !c.alive()

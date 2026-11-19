@@ -4,6 +4,17 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Model discovery follows the enabled agy auth files. Models are registered per auth (`model.for_auth`, executor model scope `oauth`) from that auth's own account home, so switching the active account in the panel changes the listed models and `agy/<model>` requests no longer fail with `unknown provider` for models the previous account lacked. The catalog cache is keyed by account home, discovery runs on the account's own resident `agy acp`, and a failed discovery keeps the previous registration instead of publishing the builtin list.
+- ACP streaming requests that finish without text now fail fast with the retryable `empty_assistant_response` error, and an empty reply no longer keeps its conversation for reuse.
+- Residents and catalog entries of disabled accounts are closed and dropped, and concurrent first discoveries and resident starts for one account are shared instead of repeated or blocking every account.
+- `executor.count_tokens` no longer triggers model discovery.
+
+### Changed
+
+- agy needs an enabled agy auth file (`type: agy`, not disabled, `home` signed in) to expose models: the plugin no longer routes `agy/*` models to itself without one, and no longer declares a model router.
+
 ## [0.3.2] - 2026-11-19
 
 ### Fixed

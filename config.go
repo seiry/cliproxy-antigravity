@@ -113,6 +113,8 @@ func isExecutableFile(path string) bool {
 	return stat.Mode().Perm()&0111 != 0
 }
 
+var binarySearchDirectories = getBinarySearchDirectories
+
 func getBinarySearchDirectories() []string {
 	var dirs []string
 	home, _ := os.UserHomeDir()
@@ -227,7 +229,7 @@ func resolveBinaryPath(path string) string {
 		baseNames = winNames
 	}
 
-	for _, dir := range getBinarySearchDirectories() {
+	for _, dir := range binarySearchDirectories() {
 		for _, name := range baseNames {
 			target := filepath.Join(dir, name)
 			if isExecutableFile(target) {

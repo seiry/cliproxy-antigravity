@@ -118,6 +118,52 @@ func syncAccountAuthFiles(authDir, accountsDir string, knownHomes map[string]boo
 	}
 }
 
+// enabledAgyHomes lists the homes of enabled, signed-in agy auth files, deduped. An empty entry is
+// the process HOME, which an auth file without a home runs against.
+func enabledAgyHomes(authDir string) []string {
+	if authDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(authDir)
+	if err != nil {
+		return nil
+	}
+	var homes []string
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(authDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var meta struct {
+			Type     string `json:"type"`
+			Disabled bool   `json:"disabled"`
+			Home     string `json:"home"`
+		}
+		if json.Unmarshal(data, &meta) != nil || !strings.EqualFold(meta.Type, providerID) || meta.Disabled {
+			continue
+		}
+		home := ""
+		if strings.TrimSpace(meta.Home) != "" {
+			validated, err := validateWorkdir(meta.Home)
+			if err != nil || !accountSignedIn(validated) {
+				continue
+			}
+			home = validated
+		} else if processHome, err := os.UserHomeDir(); err != nil || !accountSignedIn(processHome) {
+			continue
+		}
+		if !seen[home] {
+			seen[home] = true
+			homes = append(homes, home)
+		}
+	}
+	return homes
+}
+
 func writeAgyAuthFile(path, email, home string) {
 	content := map[string]any{
 		"type":     "agy",

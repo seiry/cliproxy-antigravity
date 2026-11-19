@@ -148,6 +148,10 @@ func executeStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions)
 	toolCalls, isToolCall := extractToolCalls(fullResponse)
 	isToolCall = isToolCall && opts.HasTools
 	plan.retainConv(conv, fullResponse, toolCalls, isToolCall)
+	if !isToolCall && strings.TrimSpace(fullResponse) == "" {
+		closePluginStream(streamID, emptyResponseError())
+		return
+	}
 	if isToolCall {
 		_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{"tool_calls": toolCalls}, nil, nil, ""))
 		finish := "tool_calls"
@@ -180,18 +184,17 @@ func executeStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions)
 	closePluginStream(streamID, nil)
 }
 
-// discoverModelsACP lists models from the resident agy of the CLIProxyAPI process HOME.
+// discoverModelsACP lists the models of cfg's account from its resident agy.
 func discoverModelsACP(cfg pluginConfig) ([]modelInfo, map[string]string, error) {
-	c := anyLiveACP()
+	c := livePooledACP(cfg)
 	switch {
-	case cfg.AccountHome != "":
+	case c != nil:
+	case cfg.AccountHome != "" || processHomeServesRequests():
 		var err error
 		if c, err = acquireACP(cfg); err != nil {
 			return nil, nil, err
 		}
-	case c == nil:
-		// Nothing resident yet (plugin registration): list from a throwaway process instead of
-		// pooling one for the process HOME that requests with an account home would never use.
+	default:
 		temp, err := startACP(cfg, "discovery")
 		if err != nil {
 			return nil, nil, err
@@ -199,6 +202,8 @@ func discoverModelsACP(cfg pluginConfig) ([]modelInfo, map[string]string, error)
 		defer temp.shutdown(errors.New("discovery finished"))
 		c = temp
 	}
+	c.busy.Add(1)
+	defer c.busy.Add(-1)
 	ctx, cancel := context.WithTimeout(context.Background(), acpDiscoverTimeout)
 	defer cancel()
 	cwd := nonEmpty(cfg.Workdir, ".")
@@ -238,6 +243,15 @@ func discoverModelsACP(cfg pluginConfig) ([]modelInfo, map[string]string, error)
 		return nil, nil, fmt.Errorf("agy acp reported no models")
 	}
 	return models, mapping, nil
+}
+
+func processHomeServesRequests() bool {
+	for _, home := range enabledAgyHomes(currentAuthDir()) {
+		if home == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // safeGo runs fn on a goroutine that can never take the CLIProxyAPI process down with a panic.

@@ -330,27 +330,3 @@ func TestParseAgyJSONOutputUsesTerminalLine(t *testing.T) {
 		t.Fatalf("unexpected result: %#v", got)
 	}
 }
-
-func TestRouteModel(t *testing.T) {
-	invalidateModels()
-	cases := []struct {
-		model     string
-		providers []string
-		want      bool
-	}{
-		{"agy/gemini-3.8-flash", nil, true},
-		{"agy/gemini-3.8-flash(high)", nil, true},
-		{"agy/default:high", nil, true},
-		{"gemini-3.8-flash-high", nil, true},
-		{"antigravity/gemini-3.8-flash", nil, true},
-		{"antigravity/gemini-3.8-flash", []string{"antigravity"}, false},
-		{"gpt-5.5", nil, false},
-		{"agy/gemini-3.8-flash", []string{"agy"}, false},
-	}
-	for _, tc := range cases {
-		resp := routeModel(modelRouteRequest{RequestedModel: tc.model, AvailableProviders: tc.providers})
-		if resp.Handled != tc.want || (tc.want && resp.TargetKind != "self") {
-			t.Errorf("routeModel(%q, %v) = %+v, want handled=%v", tc.model, tc.providers, resp, tc.want)
-		}
-	}
-}

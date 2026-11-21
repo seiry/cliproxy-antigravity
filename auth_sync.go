@@ -49,8 +49,11 @@ func ensureAuthFile(configYAML []byte, cfg pluginConfig) {
 			Type string `json:"type"`
 			Home string `json:"home"`
 		}
-		if errParse := json.Unmarshal(data, &meta); errParse == nil && strings.EqualFold(meta.Type, "agy") {
+		if errParse := json.Unmarshal(data, &meta); errParse == nil && isAgyAuthType(meta.Type) {
 			hasAgyAuth = true
+			if !strings.EqualFold(meta.Type, providerID) {
+				migrateAuthFileType(filePath, data)
+			}
 			if home, errHome := validateWorkdir(meta.Home); errHome == nil && home != "" {
 				knownHomes[home] = true
 			}
@@ -143,7 +146,7 @@ func enabledAgyHomes(authDir string) []string {
 			Disabled bool   `json:"disabled"`
 			Home     string `json:"home"`
 		}
-		if json.Unmarshal(data, &meta) != nil || !strings.EqualFold(meta.Type, providerID) || meta.Disabled {
+		if json.Unmarshal(data, &meta) != nil || !isAgyAuthType(meta.Type) || meta.Disabled {
 			continue
 		}
 		home := ""
@@ -166,7 +169,7 @@ func enabledAgyHomes(authDir string) []string {
 
 func writeAgyAuthFile(path, email, home string) {
 	content := map[string]any{
-		"type":     "agy",
+		"type":     providerID,
 		"email":    email,
 		"label":    email,
 		"disabled": false,
@@ -179,6 +182,26 @@ func writeAgyAuthFile(path, email, home string) {
 		return
 	}
 	_ = os.WriteFile(path, encoded, 0o600)
+}
+
+// migrateAuthFileType rewrites a legacy-typed auth file to providerID, keeping every other field.
+func migrateAuthFileType(path string, data []byte) {
+	var content map[string]any
+	if json.Unmarshal(data, &content) != nil {
+		return
+	}
+	content["type"] = providerID
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return
+	}
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, encoded, 0o600) != nil {
+		return
+	}
+	if os.Rename(tmp, path) != nil {
+		_ = os.Remove(tmp)
+	}
 }
 
 func agyStateDir(home string) string {

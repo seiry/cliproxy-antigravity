@@ -44,7 +44,7 @@ func setupFakeLogin(t *testing.T) (pluginConfig, string) {
 func writeCallback(t *testing.T, authDir, state, code, errMsg string) {
 	t.Helper()
 	data, _ := json.Marshal(map[string]string{"code": code, "state": state, "error": errMsg})
-	if err := os.WriteFile(filepath.Join(authDir, ".oauth-agy-"+state+".oauth"), data, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(authDir, ".oauth-"+providerID+"-"+state+".oauth"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -83,13 +83,13 @@ func TestAgyLoginFlow(t *testing.T) {
 		t.Fatalf("status = %#v", resp)
 	}
 	home, _ := resp.Auth.Metadata["home"].(string)
-	if resp.Auth.Provider != "agy" || resp.Auth.FileName != "antigravity-new@example.com.json" || resp.Auth.Label != "new@example.com" {
+	if resp.Auth.Provider != providerID || resp.Auth.FileName != "antigravity-new@example.com.json" || resp.Auth.Label != "new@example.com" {
 		t.Fatalf("auth = %#v", resp.Auth)
 	}
 	if filepath.Dir(home) != cfg.AccountsDir || !accountSignedIn(home) {
 		t.Fatalf("account home %q is not a signed-in home under %q", home, cfg.AccountsDir)
 	}
-	if _, err := os.Stat(filepath.Join(authDir, ".oauth-agy-"+start.State+".oauth")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(authDir, ".oauth-"+providerID+"-"+start.State+".oauth")); !os.IsNotExist(err) {
 		t.Fatal("callback file should be consumed")
 	}
 	if resp := pollAgyLogin(start.State, authDir); resp.Status != "error" {

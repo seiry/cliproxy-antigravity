@@ -13,7 +13,8 @@ All notable changes to this project will be documented here.
 
 ### Changed
 
-- agy needs an enabled agy auth file (`type: agy`, not disabled, `home` signed in) to expose models: the plugin no longer routes `agy/*` models to itself without one, and no longer declares a model router.
+- The provider key is `agy-acp` instead of `agy`, so CLIProxyAPI's auth-files panel shows this fork apart from the upstream plugin. Model IDs keep the `agy/` prefix. Auth files typed `agy` are still accepted and rewritten to `agy-acp` when the plugin registers.
+- agy needs an enabled agy auth file (`type: agy-acp`, not disabled, `home` signed in) to expose models: the plugin no longer routes `agy/*` models to itself without one, and no longer declares a model router.
 
 ## [0.3.2] - 2026-11-19
 

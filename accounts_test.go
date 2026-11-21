@@ -125,7 +125,7 @@ func TestEnsureAuthFileSyncsAccountsDir(t *testing.T) {
 		t.Fatalf("expected 2 auth files (no default, no unsigned account), got %v", files)
 	}
 	work := files["antigravity-work@example.com.json"]
-	if work == nil || work["type"] != "agy" || work["home"] != filepath.Join(accountsDir, "work") {
+	if work == nil || work["type"] != providerID || work["home"] != filepath.Join(accountsDir, "work") {
 		t.Fatalf("work auth file = %#v", work)
 	}
 

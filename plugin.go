@@ -11,10 +11,18 @@ import (
 
 const (
 	pluginID      = "cliproxy-antigravity"
-	providerID    = "agy"
-	pluginVersion = "0.3.2-acp.9"
+	providerID    = "agy-acp"
+	pluginVersion = "0.3.2-acp.10"
 	schemaVersion = 6
 )
+
+// legacyProviderID is the upstream plugin's provider name; auth files written before the rename
+// still carry it and are migrated to providerID when the plugin registers.
+const legacyProviderID = "agy"
+
+func isAgyAuthType(typ string) bool {
+	return strings.EqualFold(typ, providerID) || strings.EqualFold(typ, legacyProviderID)
+}
 
 const (
 	methodPluginRegister        = "plugin.register"

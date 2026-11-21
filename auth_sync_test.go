@@ -60,8 +60,8 @@ func TestEnsureAuthFileCreatesFile(t *testing.T) {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		t.Fatalf("failed to unmarshal created auth file: %v", err)
 	}
-	if meta["type"] != "agy" {
-		t.Errorf("expected type agy, got %v", meta["type"])
+	if meta["type"] != providerID {
+		t.Errorf("expected type %s, got %v", providerID, meta["type"])
 	}
 	if meta["email"] != "test-user@example.com" {
 		t.Errorf("expected email test-user@example.com, got %v", meta["email"])
@@ -91,15 +91,15 @@ func TestEnsureAuthFileOverwritesEmptyCandidate(t *testing.T) {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		t.Fatalf("failed to unmarshal auth file: %v", err)
 	}
-	if meta["type"] != "agy" {
-		t.Errorf("expected type agy, got %v", meta["type"])
+	if meta["type"] != providerID {
+		t.Errorf("expected type %s, got %v", providerID, meta["type"])
 	}
 }
 
 func TestEnsureAuthFileSkipsWhenValidExists(t *testing.T) {
 	tmpDir := t.TempDir()
 	existingFile := filepath.Join(tmpDir, "antigravity-existing.json")
-	initialContent := []byte(`{"type":"agy","email":"keep-me@example.com","disabled":false}`)
+	initialContent := []byte(`{"type":"agy-acp","email":"keep-me@example.com","disabled":false}`)
 	if err := os.WriteFile(existingFile, initialContent, 0o600); err != nil {
 		t.Fatalf("failed to write existing file: %v", err)
 	}

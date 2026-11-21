@@ -99,9 +99,10 @@ func parseAgyAuth(req authParseRequest) authParseResponse {
 	if err := json.Unmarshal(req.RawJSON, &meta); err != nil || meta == nil {
 		return authParseResponse{}
 	}
-	if typ, _ := meta["type"].(string); !strings.EqualFold(typ, providerID) {
+	if typ, _ := meta["type"].(string); !isAgyAuthType(typ) {
 		return authParseResponse{}
 	}
+	meta["type"] = providerID
 	return authParseResponse{Handled: true, Auth: agyAuthData(req.FileName, meta)}
 }
 
@@ -496,7 +497,7 @@ func listAccounts(cfg pluginConfig, authDir string, refresh bool) accountsReport
 		if json.Unmarshal(data, &meta) != nil {
 			continue
 		}
-		if typ, _ := meta["type"].(string); !strings.EqualFold(typ, providerID) {
+		if typ, _ := meta["type"].(string); !isAgyAuthType(typ) {
 			continue
 		}
 		acc := accountReport{File: name, Groups: []agyLimitGroup{}}

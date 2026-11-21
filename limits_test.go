@@ -161,7 +161,7 @@ func TestHandleManagementLimits(t *testing.T) {
 	if err := json.Unmarshal(resp.Body, &report); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if report.Provider != "agy" || len(report.Groups) != 2 || report.FetchedAt == "" {
+	if report.Provider != providerID || len(report.Groups) != 2 || report.FetchedAt == "" {
 		t.Fatalf("unexpected report: %#v", report)
 	}
 

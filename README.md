@@ -49,9 +49,9 @@ Google Antigravity
 - No direct calls to private Antigravity services
 - No Antigravity credential is stored: an `agy` auth file only points at an account home (`home`), where the official CLI keeps its own login
 
-The plugin registers under the provider key **`agy`**, and supports requests addressed to `agy/*`, `antigravity/*`, or unprefixed models.
+The plugin registers under the provider key **`agy-acp`** (so the panel tells it apart from the upstream `agy` plugin; auth files still typed `agy` are rewritten on load), and supports requests addressed to `agy/*`, `antigravity/*`, or unprefixed models.
 
-Requests are served through an enabled `agy` auth file in CLIProxyAPI's auth-dir (`type: agy`, `disabled` absent or false, `home` pointing at a signed-in account home). Without one, CLIProxyAPI lists no agy models and `agy/*` requests fail with `unknown provider`. Models are registered per auth: each enabled auth publishes the models its own account sees, so enabling or disabling an auth file in the panel switches the listed models and the account that serves requests. If discovery fails for an account, its previous models stay registered and are refreshed on the next auth change or plugin reload. Requests can arrive through any CLIProxyAPI entry protocol (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`); the host translates them to Chat Completions for the plugin.
+Requests are served through an enabled agy auth file in CLIProxyAPI's auth-dir (`type: agy-acp`, `disabled` absent or false, `home` pointing at a signed-in account home). Without one, CLIProxyAPI lists no agy models and `agy/*` requests fail with `unknown provider`. Models are registered per auth: each enabled auth publishes the models its own account sees, so enabling or disabling an auth file in the panel switches the listed models and the account that serves requests. If discovery fails for an account, its previous models stay registered and are refreshed on the next auth change or plugin reload. Requests can arrive through any CLIProxyAPI entry protocol (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`); the host translates them to Chat Completions for the plugin.
 
 ## Requirements & Platform Support
 
@@ -281,7 +281,7 @@ Antigravity groups models (for example *Gemini Models* and *Claude and GPT model
 
   ```json
   {
-    "provider": "agy",
+    "provider": "agy-acp",
     "tracking": true,
     "fetched_at": "2026-11-15T14:20:00Z",
     "groups": [
@@ -298,7 +298,7 @@ Antigravity groups models (for example *Gemini Models* and *Claude and GPT model
   ```
 
 - **Response headers** on every completion, for the requested model's group: `X-AGY-Limit-Group`, `X-AGY-Limit-Weekly-Remaining`, `X-AGY-Limit-Weekly-Reset`, `X-AGY-Limit-5h-Remaining`, `X-AGY-Limit-5h-Reset`. CLIProxyAPI forwards them to clients only when `requests.passthrough-headers: true` is set (`passthrough-headers: true` in legacy config files).
-- **CLIProxyAPI quota API** — the plugin implements the `quota_provider` capability (`quota.fetch`), so the host's `/v0/management/quota/*` and `/v0/management/plugins/cliproxy-antigravity/quota` endpoints work for any auth record whose provider is `agy` (they require an `auth_index`).
+- **CLIProxyAPI quota API** — the plugin implements the `quota_provider` capability (`quota.fetch`), so the host's `/v0/management/quota/*` and `/v0/management/plugins/cliproxy-antigravity/quota` endpoints work for any auth record whose provider is `agy-acp` (they require an `auth_index`).
 
 Quota errors from `agy` are returned as HTTP 429 with `retryable` set from Antigravity's own error report, so CLIProxyAPI can cool down and retry correctly. When `enforce_limits` rejects a request, the error also carries `retry_after_seconds` until the bucket resets, which CLIProxyAPI turns into a `Retry-After` header.
 
@@ -344,7 +344,7 @@ When the plugin is registered or reconfigured, it writes an `antigravity-<email>
 
 ```json
 {
-  "type": "agy",
+  "type": "agy-acp",
   "email": "work@example.com",
   "label": "work@example.com",
   "home": "/home/me/.agy-accounts/work",

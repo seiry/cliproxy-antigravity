@@ -12,7 +12,7 @@ import (
 const (
 	pluginID      = "cliproxy-antigravity"
 	providerID    = "agy-acp"
-	pluginVersion = "0.3.2-acp.10"
+	pluginVersion = "0.3.2-acp.11"
 	schemaVersion = 6
 )
 

@@ -354,7 +354,7 @@ When the plugin is registered or reconfigured, it writes an `antigravity-<email>
 
 You can also write these files yourself instead of using `accounts_dir`. An agy auth file without `home` uses the CLIProxyAPI process's own HOME. When `accounts_dir` is set, that default account gets an auth file only if it is signed in.
 
-CLIProxyAPI then treats the accounts like any other multi-credential provider. It picks one per request according to `routing.strategy` (round-robin by default), cools an account down when it returns 429, and shows a separate quota card for each account. Usage limits are tracked separately for each account.
+Deleting an account's auth file in the panel removes it for good: the plugin marks every home it issued an auth file for (`.cpa-auth-file-issued`) and does not recreate one for it. To bring the account back, sign it in again from the panel. CLIProxyAPI then treats the accounts like any other multi-credential provider. It picks one per request according to `routing.strategy` (round-robin by default), cools an account down when it returns 429, and shows a separate quota card for each account. Usage limits are tracked separately for each account.
 
 Things to know:
 

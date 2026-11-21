@@ -56,6 +56,7 @@ func ensureAuthFile(configYAML []byte, cfg pluginConfig) {
 			}
 			if home, errHome := validateWorkdir(meta.Home); errHome == nil && home != "" {
 				knownHomes[home] = true
+				markAuthFileIssued(home)
 			}
 		}
 	}
@@ -102,7 +103,7 @@ func syncAccountAuthFiles(authDir, accountsDir string, knownHomes map[string]boo
 			continue
 		}
 		home := filepath.Join(accountsDir, entry.Name())
-		if knownHomes[home] || !accountSignedIn(home) {
+		if knownHomes[home] || authFileIssued(home) || !accountSignedIn(home) {
 			continue
 		}
 		email := emailFromHome(home)
@@ -181,7 +182,26 @@ func writeAgyAuthFile(path, email, home string) {
 	if errMarshal != nil {
 		return
 	}
-	_ = os.WriteFile(path, encoded, 0o600)
+	if os.WriteFile(path, encoded, 0o600) == nil && home != "" {
+		markAuthFileIssued(home)
+	}
+}
+
+// authFileIssuedMarker sits in an account home once an auth file was created for it, so an auth
+// file deleted in the panel stays deleted instead of being recreated from the signed-in home.
+const authFileIssuedMarker = ".cpa-auth-file-issued"
+
+func markAuthFileIssued(home string) {
+	marker := filepath.Join(home, authFileIssuedMarker)
+	if _, err := os.Stat(marker); err == nil {
+		return
+	}
+	_ = os.WriteFile(marker, nil, 0o600)
+}
+
+func authFileIssued(home string) bool {
+	_, err := os.Stat(filepath.Join(home, authFileIssuedMarker))
+	return err == nil
 }
 
 // migrateAuthFileType rewrites a legacy-typed auth file to providerID, keeping every other field.

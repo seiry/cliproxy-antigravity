@@ -6,6 +6,7 @@ All notable changes to this project will be documented here.
 
 ### Fixed
 
+- An agy auth file deleted in the panel is no longer recreated on the next plugin registration (restart or config reload) while its account home stays signed in. The plugin leaves a `.cpa-auth-file-issued` marker in every home it has issued an auth file for and only creates auth files for unmarked homes; a fresh panel login still gets its own.
 - Model discovery follows the enabled agy auth files. Models are registered per auth (`model.for_auth`, executor model scope `oauth`) from that auth's own account home, so switching the active account in the panel changes the listed models and `agy/<model>` requests no longer fail with `unknown provider` for models the previous account lacked. The catalog cache is keyed by account home, discovery runs on the account's own resident `agy acp`, and a failed discovery keeps the previous registration instead of publishing the builtin list.
 - ACP streaming requests that finish without text now fail fast with the retryable `empty_assistant_response` error, and an empty reply no longer keeps its conversation for reuse.
 - Residents and catalog entries of disabled accounts are closed and dropped, and concurrent first discoveries and resident starts for one account are shared instead of repeated or blocking every account.

@@ -49,6 +49,8 @@ Google Antigravity
 - No direct calls to private Antigravity services
 - No Antigravity credential is stored: an `agy` auth file only points at an account home (`home`), where the official CLI keeps its own login
 
+This fork's differences from upstream, and which upstream changes it merged or left out, are in [FORK.md](FORK.md).
+
 The plugin registers under the provider key **`agy-acp`** (so the panel tells it apart from the upstream `agy` plugin; auth files still typed `agy` are rewritten on load), and supports requests addressed to `agy/*`, `antigravity/*`, or unprefixed models.
 
 Requests are served through an enabled agy auth file in CLIProxyAPI's auth-dir (`type: agy-acp`, `disabled` absent or false, `home` pointing at a signed-in account home). Without one, CLIProxyAPI lists no agy models and `agy/*` requests fail with `unknown provider`. Models are registered per auth: each enabled auth publishes the models its own account sees, so enabling or disabling an auth file in the panel switches the listed models and the account that serves requests. If discovery fails for an account, its previous models stay registered and are refreshed on the next auth change or plugin reload. Requests can arrive through any CLIProxyAPI entry protocol (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`); the host translates them to Chat Completions for the plugin.
@@ -213,14 +215,16 @@ The client application can execute the function and pass the result back with `r
 
 ### Conversation Resumption
 
-To resume an existing conversation in Antigravity, pass `conversation_id` in the JSON body or via the `X-AGY-Conversation-ID` header:
+In `mode: acp` (the default) clients need no ID: send the full `messages` history as usual. When the history repeats a turn this account's resident `agy` already answered, the plugin continues that session with only the new messages, which keeps Antigravity's prompt cache warm. Set CLIProxyAPI's `routing.session-affinity: true` so a chat keeps landing on the same account.
+
+A request that carries a `conversation_id` (JSON body or `X-AGY-Conversation-ID`) runs through `agy --conversation <id>` instead, as in `mode: print`. Save the `conversation_id` returned in the JSON response or in the final stream chunk and pass it back:
 
 ```bash
 curl http://127.0.0.1:8317/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer YOUR_CLIPROXY_API_KEY' \
   -d '{
-    "model": "gemini-3.8-flash-high",
+    "model": "agy/gemini-3.8-flash-high",
     "conversation_id": "YOUR_PREVIOUS_CONVERSATION_ID",
     "messages": [
       {"role": "user", "content": "What was the previous answer?"}
@@ -228,7 +232,9 @@ curl http://127.0.0.1:8317/v1/chat/completions \
   }'
 ```
 
-When resuming an existing session, the plugin only sends the new turn to `agy`, avoiding duplicating previous conversation history already stored in the session.
+The plugin sends only the new turn to `agy`. The ID is agy's raw session ID, so it resumes only when the request lands on the account that created it: use session affinity, `routing.strategy: fill-first` or a single account if you rely on it.
+
+Upstream 0.4.0's account-bound (signed) conversation IDs and its `X-AGY-Continue-On-Another-Account` handoff are not part of this fork; see [FORK.md](FORK.md).
 
 ### Reasoning Effort
 
@@ -319,7 +325,9 @@ An **Antigravity CLI** card also appears on the panel's OAuth login page. It run
 
 Behind the scenes the plugin starts the official `agy` sign-in in a new home under `accounts_dir` (default `~/.agy-accounts`) and types the pasted code into it. The tokens are exchanged and stored by `agy` itself; the plugin never sees them. CLIProxyAPI then saves an auth file pointing at the new home. Adding accounts from the panel requires Linux or macOS.
 
-The sidebar page reads the management key the panel saved in the browser. If you did not tick "remember password" when logging in to the panel, the page asks for the key once per tab.
+The accounts page opens without a key prompt. Open it from the CLIProxyAPI sidebar to use your existing management-panel login, even with **Remember password** off (requires a panel build with accounts-page session support). Older panels can still load accounts if they have a remembered login on the same origin. Without an authenticated connection, the page shows the routing guide but does not load private account data or allow changes. As of 2026-11-24 no panel source on GitHub implements that bridge (`agy-accounts/v1`), so tick **Remember password** when you log in to the panel.
+
+Use **Hide email addresses** before sharing your screen. The page shows numbered accounts and hides auth filenames and home paths, which can also contain email addresses. The preference is kept in your browser; it does not redact the management API or change how accounts are stored.
 
 #### Adding accounts by hand
 
@@ -354,12 +362,16 @@ When the plugin is registered or reconfigured, it writes an `antigravity-<email>
 
 You can also write these files yourself instead of using `accounts_dir`. An agy auth file without `home` uses the CLIProxyAPI process's own HOME. When `accounts_dir` is set, that default account gets an auth file only if it is signed in.
 
-Deleting an account's auth file in the panel removes it for good: the plugin marks every home it issued an auth file for (`.cpa-auth-file-issued`) and does not recreate one for it. To bring the account back, sign it in again from the panel. CLIProxyAPI then treats the accounts like any other multi-credential provider. It picks one per request according to `routing.strategy` (round-robin by default), cools an account down when it returns 429, and shows a separate quota card for each account. Usage limits are tracked separately for each account.
+Deleting an account's auth file in the panel removes it for good: the plugin marks every home it issued an auth file for (`.cpa-auth-file-issued`) and does not recreate one for it. To bring the account back, sign it in again from the panel.
+
+CLIProxyAPI then treats the accounts like any other multi-credential provider and chooses an eligible account using `routing.strategy`. `round-robin` (the default) rotates requests between eligible accounts of the same priority; `fill-first` prefers the first eligible account. On hosts that support `weighted-round-robin`, set that strategy and add a numeric `weight` to each auth file (for example, `3` and `1` for a roughly 75/25 request split). This divides requests, not tokens. An account that returns 429 is cooled down. Usage limits and quota cards are separate per account.
 
 Things to know:
 
-- Conversations live in the home of the account that created them. Resuming a `conversation_id` only works if the request lands on that same account, so use `routing.strategy: fill-first` (or a single account) if you rely on resumption.
-- Model discovery (`agy models`) and `GET /v0/management/agy/limits` use the CLIProxyAPI process's HOME.
+- New chats follow your routing strategy; `routing.session-affinity: true` keeps a chat on one account. A raw `conversation_id` resumes only on the account that created it (see [Conversation Resumption](#conversation-resumption)).
+- **Disable** keeps an auth record out of rotation without removing its sign-in. With no enabled agy auth file the plugin serves no models.
+- **Remove** deletes the auth file but keeps the signed-in agy home, and the plugin does not import that home again.
+- Models are discovered per enabled auth, in that auth's own home. `GET /v0/management/agy/limits` uses the CLIProxyAPI process's HOME.
 - Each home has its own agy settings, MCP servers and plugins. The `workdir` is shared.
 
 ### Permission safety

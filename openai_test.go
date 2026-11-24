@@ -199,17 +199,16 @@ func TestMakeChatCompletionMapsUsageAndConversation(t *testing.T) {
 	}
 }
 
-func TestMakeSSEChunkIncludesConversationID(t *testing.T) {
-	raw := makeSSEChunk("id", 1, "agy/test", map[string]any{"content": "hello"}, nil, nil, "conv-stream-1")
-	str := string(raw)
-	if !strings.Contains(str, `"conversation_id":"conv-stream-1"`) {
-		t.Fatalf("expected conversation_id in SSE chunk: %s", str)
+func TestMakeChatChunkIncludesConversationID(t *testing.T) {
+	raw := makeChatChunk("id", 1, "agy/test", map[string]any{"content": "hello"}, nil, nil, "conv-stream-1")
+	if !json.Valid(raw) || !strings.Contains(string(raw), `"conversation_id":"conv-stream-1"`) {
+		t.Fatalf("expected conversation_id in JSON chunk: %s", raw)
 	}
 }
 
-func TestMakeSSEUsageChunkHasEmptyChoices(t *testing.T) {
-	raw := makeSSEChunk("id", 1, "agy/test", map[string]any{}, nil, map[string]any{"total_tokens": 1}, "")
-	if !strings.Contains(string(raw), `"choices":[]`) || !strings.HasPrefix(string(raw), "data: ") {
-		t.Fatalf("unexpected SSE: %s", raw)
+func TestMakeChatUsageChunkHasEmptyChoices(t *testing.T) {
+	raw := makeChatChunk("id", 1, "agy/test", map[string]any{}, nil, map[string]any{"total_tokens": 1}, "")
+	if !json.Valid(raw) || !strings.Contains(string(raw), `"choices":[]`) {
+		t.Fatalf("unexpected usage chunk: %s", raw)
 	}
 }

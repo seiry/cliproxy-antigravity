@@ -231,6 +231,46 @@ def main():
                  "content_ok": checks})
     step("three concurrent streams on one resident process", concurrent_streams)
 
+    def is_json_object(text):
+        try:
+            return isinstance(json.loads(text), dict)
+        except ValueError:
+            return False
+
+    def sse_events(req):
+        with urllib.request.urlopen(req, timeout=180) as r:
+            lines = [raw.decode().rstrip("\r\n") for raw in r]
+        data = [ln[5:].strip() for ln in lines if ln.startswith("data:")]
+        bad = [d for d in data if d != "[DONE]" and not is_json_object(d)]
+        return data, bad
+
+    def stream_framing():
+        prompt = "Count from 1 to 12 separated by commas, nothing else."
+        openai_req = cli._req({"model": MODEL, "stream": True, "stream_options": {"include_usage": True},
+                               "messages": [{"role": "user", "content": prompt}]})
+        data, bad = sse_events(openai_req)
+        events = [json.loads(d) for d in data if d != "[DONE]"]
+        deltas = [c.get("delta") or {} for e in events for c in e.get("choices", [])]
+        role_at = next((i for i, d in enumerate(deltas) if d.get("role") == "assistant"), None)
+        content_at = next((i for i, d in enumerate(deltas) if d.get("content")), None)
+        text = "".join(d.get("content") or "" for d in deltas)
+        openai_ok = (not bad and data.count("[DONE]") == 1 and data[-1] == "[DONE]"
+                     and role_at is not None and content_at is not None and role_at < content_at
+                     and "12" in text and any(e.get("usage") for e in events))
+        gemini_req = urllib.request.Request(
+            cli.base + "/v1beta/models/" + MODEL + ":streamGenerateContent?alt=sse",
+            data=json.dumps({"contents": [{"role": "user", "parts": [{"text": prompt}]}]}).encode(),
+            headers={"x-goog-api-key": cli.key, "Content-Type": "application/json"})
+        gdata, gbad = sse_events(gemini_req)
+        gtext = "".join(p.get("text", "") for d in gdata if d != "[DONE]"
+                        for c in json.loads(d).get("candidates", []) for p in c.get("content", {}).get("parts", []))
+        gemini_ok = not gbad and "[DONE]" not in gdata and "12" in gtext
+        return openai_ok and gemini_ok, {
+            "openai": {"events": len(data), "done": data.count("[DONE]"), "bad": bad[:2],
+                       "role_index": role_at, "first_content_index": content_at, "text": text[:60]},
+            "gemini": {"events": len(gdata), "bad": gbad[:2], "text": gtext[:60]}}
+    step("stream framing on /v1/chat/completions and Gemini SSE", stream_framing)
+
     def tool_round_trip():
         tools = [{"type": "function", "function": {
             "name": "get_weather", "description": "Current weather for a city",

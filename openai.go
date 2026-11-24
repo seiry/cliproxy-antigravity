@@ -486,7 +486,7 @@ func newCompletionID() string {
 	return fmt.Sprintf("chatcmpl-agy-%d", time.Now().UnixNano())
 }
 
-func makeSSEChunk(id string, created int64, model string, delta map[string]any, finishReason *string, usage map[string]any, conversationID string) []byte {
+func makeChatChunk(id string, created int64, model string, delta map[string]any, finishReason *string, usage map[string]any, conversationID string) []byte {
 	choice := map[string]any{
 		"index": 0,
 		"delta": delta,
@@ -511,7 +511,58 @@ func makeSSEChunk(id string, created int64, model string, delta map[string]any, 
 		body["usage"] = usage
 	}
 	raw, _ := json.Marshal(body)
-	return append(append([]byte("data: "), raw...), []byte("\n\n")...)
+	return raw
+}
+
+// chatStream writes Chat Completions chunks to a plugin stream. The role chunk waits for the first
+// real output, so an error before any output still reaches the host's retry path.
+type chatStream struct {
+	streamID       string
+	completionID   string
+	created        int64
+	model          string
+	conversationID string
+	rawChunks      bool
+	sentRole       bool
+}
+
+func newChatStream(req rpcExecutorRequest, conversationID string) *chatStream {
+	path, _ := req.Metadata["request_path"].(string)
+	return &chatStream{
+		streamID:       req.StreamID,
+		completionID:   newCompletionID(),
+		created:        time.Now().Unix(),
+		model:          displayModel(req.Model),
+		conversationID: conversationID,
+		// The host's OpenAI HTTP handlers frame plain JSON chunks and send [DONE] themselves.
+		// Other entrypoints may translate these chunks as SSE, so those keep the framing.
+		rawChunks: path == "/v1/chat/completions" || path == "/v1/completions",
+	}
+}
+
+func (s *chatStream) send(delta map[string]any, finishReason *string, usage map[string]any) error {
+	chunk := makeChatChunk(s.completionID, s.created, s.model, delta, finishReason, usage, s.conversationID)
+	if !s.rawChunks {
+		chunk = append(append([]byte("data: "), chunk...), '\n', '\n')
+	}
+	return emitPluginStreamChunk(s.streamID, chunk)
+}
+
+func (s *chatStream) emit(delta map[string]any, finishReason *string, usage map[string]any) error {
+	if !s.sentRole {
+		if err := s.send(map[string]any{"role": "assistant"}, nil, nil); err != nil {
+			return err
+		}
+		s.sentRole = true
+	}
+	return s.send(delta, finishReason, usage)
+}
+
+func (s *chatStream) finish() {
+	if !s.rawChunks {
+		_ = emitPluginStreamChunk(s.streamID, []byte("data: [DONE]\n\n"))
+	}
+	closePluginStream(s.streamID, nil)
 }
 
 // compactToolArguments returns the arguments as single-line JSON text. Models pretty-print the

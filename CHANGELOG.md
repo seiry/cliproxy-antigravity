@@ -4,6 +4,25 @@ All notable changes to this project will be documented here.
 
 ## [Unreleased]
 
+## [0.4.0-acp.1] - 2026-11-24
+
+Fork release on top of upstream 0.4.0. Upstream 0.4.0 is merged, but only part of it is active here; [FORK.md](FORK.md) lists what was taken and what was left out.
+
+### Fixed
+
+- Chat Completions streams on `/v1/chat/completions` and `/v1/completions` send plain JSON chunks and leave SSE framing and `[DONE]` to the host, in both `mode: acp` and `mode: print` (ported from upstream 0.4.0). Other entrypoints, such as the Gemini routes, keep the framed chunks. The role chunk now waits for the first real output, so an error before any output still reaches the host's retry path.
+- The accounts page starts panel logins with the provider key this fork registers (`agy-acp`) instead of upstream's `agy`.
+
+### Changed
+
+- The accounts page is upstream 0.4.0's: no second key prompt, private data loads through a panel bridge or the panel's remembered login, **Hide email addresses** also hides auth filenames and home paths, and the account list is served `Cache-Control: no-store`.
+
+### Not adopted from upstream 0.4.0
+
+- Account-bound (signed) conversation IDs, the `scheduler.pick` and `request.intercept_*` capabilities, the `X-AGY-Continue-On-Another-Account` handoff and `agy_replay_summary`. Raw conversation IDs keep working in `mode: print`. See [FORK.md](FORK.md).
+
+## Fork changes before 0.4.0-acp.1 (0.3.2-acp.1 to 0.3.2-acp.11)
+
 ### Fixed
 
 - An agy auth file deleted in the panel is no longer recreated on the next plugin registration (restart or config reload) while its account home stays signed in. The plugin leaves a `.cpa-auth-file-issued` marker in every home it has issued an auth file for and only creates auth files for unmarked homes; a fresh panel login still gets its own.
@@ -16,6 +35,22 @@ All notable changes to this project will be documented here.
 
 - The provider key is `agy-acp` instead of `agy`, so CLIProxyAPI's auth-files panel shows this fork apart from the upstream plugin. Model IDs keep the `agy/` prefix. Auth files typed `agy` are still accepted and rewritten to `agy-acp` when the plugin registers.
 - agy needs an enabled agy auth file (`type: agy-acp`, not disabled, `home` signed in) to expose models: the plugin no longer routes `agy/*` models to itself without one, and no longer declares a model router.
+
+## [0.4.0] - 2026-11-23
+
+### Added
+
+- Account-bound Antigravity conversation IDs keep native resumes on the originating account while new chats follow the host's routing strategy. Chat Completions clients can opt in to continuing on another account by replaying a transcript or summary.
+- **Hide email addresses** on the Antigravity accounts page also hides account filenames and home paths. The setting stays in the browser.
+
+### Changed
+
+- The accounts page no longer prompts for a second management key. A compatible panel reuses its existing login; private account data and account actions still require authentication.
+- Older raw conversation IDs cannot be resumed on managed accounts because they do not identify the owning account. Omit the old ID and send the chat history to start a new session.
+
+### Fixed
+
+- Chat Completions streams no longer double-frame SSE chunks or send a duplicate `[DONE]` event.
 
 ## [0.3.2] - 2026-11-19
 

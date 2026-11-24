@@ -459,7 +459,10 @@ func newAccountAuth(s *loginSession, authDir string) authData {
 // Accounts overview for the plugin's management page.
 
 //go:embed accounts_page.html
-var accountsPageHTML []byte
+var accountsPageSource []byte
+
+// The page ships with upstream's provider key; panel OAuth must name the key this fork registers.
+var accountsPageHTML = bytes.Replace(accountsPageSource, []byte("const PROVIDER = 'agy';"), []byte("const PROVIDER = '"+providerID+"';"), 1)
 
 const accountsManagementPath = "/agy/accounts"
 const accountsResourcePath = "/accounts"

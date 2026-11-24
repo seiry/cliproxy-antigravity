@@ -105,13 +105,7 @@ func executeStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions)
 		return
 	}
 
-	completionID := newCompletionID()
-	created := time.Now().Unix()
-	model := displayModel(req.Model)
-	if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{"role": "assistant"}, nil, nil, "")); err != nil {
-		return
-	}
-
+	out := newChatStream(req, "")
 	var streamed strings.Builder
 	emittedLen := 0
 	isToolCallStream := false
@@ -132,7 +126,7 @@ func executeStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions)
 		}
 		pending := streamed.String()[emittedLen:]
 		emittedLen = streamed.Len()
-		return emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{"content": pending}, nil, nil, ""))
+		return out.emit(map[string]any{"content": pending}, nil, nil)
 	}
 
 	result, conv, err := runACP(cfg, opts, plan, onDelta)
@@ -153,35 +147,31 @@ func executeStreamACP(req rpcExecutorRequest, cfg pluginConfig, opts agyOptions)
 		return
 	}
 	if isToolCall {
-		_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{"tool_calls": toolCalls}, nil, nil, ""))
+		_ = out.emit(map[string]any{"tool_calls": toolCalls}, nil, nil)
 		finish := "tool_calls"
-		_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, &finish, nil, ""))
+		_ = out.emit(map[string]any{}, &finish, nil)
 		if streamWantsUsage(req) {
-			_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, nil, openAIUsage(result.Usage), ""))
+			_ = out.emit(map[string]any{}, nil, openAIUsage(result.Usage))
 		}
-		_ = emitPluginStreamChunk(streamID, []byte("data: [DONE]\n\n"))
-		closePluginStream(streamID, nil)
+		out.finish()
 		return
 	}
 
 	if streamed.Len() > emittedLen {
-		if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{"content": streamed.String()[emittedLen:]}, nil, nil, "")); err != nil {
+		if err := out.emit(map[string]any{"content": streamed.String()[emittedLen:]}, nil, nil); err != nil {
 			return
 		}
 	}
 	finish := "stop"
-	if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, &finish, nil, "")); err != nil {
+	if err := out.emit(map[string]any{}, &finish, nil); err != nil {
 		return
 	}
 	if streamWantsUsage(req) {
-		if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, nil, openAIUsage(result.Usage), "")); err != nil {
+		if err := out.emit(map[string]any{}, nil, openAIUsage(result.Usage)); err != nil {
 			return
 		}
 	}
-	if err := emitPluginStreamChunk(streamID, []byte("data: [DONE]\n\n")); err != nil {
-		return
-	}
-	closePluginStream(streamID, nil)
+	out.finish()
 }
 
 // discoverModelsACP lists the models of cfg's account from its resident agy.

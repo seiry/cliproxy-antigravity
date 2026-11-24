@@ -1133,15 +1133,11 @@ func executeStream(req rpcExecutorRequest) {
 	activeProcesses.add(cmd)
 	defer activeProcesses.remove(cmd)
 
-	completionID := newCompletionID()
-	created := time.Now().Unix()
-	model := displayModel(req.Model)
-	conversationID := opts.ConversationID
-
-	if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{"role": "assistant"}, nil, nil, conversationID)); err != nil {
-		killProcessTree(cmd)
-		_ = cmd.Wait()
-		return
+	out := newChatStream(req, opts.ConversationID)
+	updateConversationID := func(id string) {
+		if id != "" {
+			out.conversationID = id
+		}
 	}
 
 	scanner := bufio.NewScanner(stdout)
@@ -1166,9 +1162,7 @@ func executeStream(req rpcExecutorRequest) {
 
 		switch event.Event {
 		case "init":
-			if event.ConversationID != "" {
-				conversationID = event.ConversationID
-			}
+			updateConversationID(event.ConversationID)
 		case "step_update":
 			if event.StepUpdate.StepType == "agent_response" && event.StepUpdate.TextDelta != "" {
 				streamedText.WriteString(event.StepUpdate.TextDelta)
@@ -1188,8 +1182,7 @@ func executeStream(req rpcExecutorRequest) {
 
 				pending := streamedText.String()[emittedLen:]
 				emittedLen = streamedText.Len()
-				payload := makeSSEChunk(completionID, created, model, map[string]any{"content": pending}, nil, nil, conversationID)
-				if err := emitPluginStreamChunk(streamID, payload); err != nil {
+				if err := out.emit(map[string]any{"content": pending}, nil, nil); err != nil {
 					killProcessTree(cmd)
 					_ = cmd.Wait()
 					return
@@ -1199,9 +1192,7 @@ func executeStream(req rpcExecutorRequest) {
 			if event.Result != nil {
 				copyResult := *event.Result
 				terminal = &copyResult
-				if copyResult.ConversationID != "" {
-					conversationID = copyResult.ConversationID
-				}
+				updateConversationID(copyResult.ConversationID)
 			}
 		case "error":
 			streamError = strings.TrimSpace(event.Message)
@@ -1211,9 +1202,7 @@ func executeStream(req rpcExecutorRequest) {
 		default:
 			if event.Status != "" {
 				terminal = &agyResult{Status: event.Status, Response: event.Response, Error: event.Error, Usage: event.Usage, ConversationID: event.ConversationID}
-				if event.ConversationID != "" {
-					conversationID = event.ConversationID
-				}
+				updateConversationID(event.ConversationID)
 			}
 		}
 	}
@@ -1265,45 +1254,37 @@ func executeStream(req rpcExecutorRequest) {
 	}
 	if opts.HasTools && isToolCall {
 		// Emit tool_calls delta chunk
-		toolDelta := makeSSEChunk(completionID, created, model, map[string]any{
-			"tool_calls": toolCalls,
-		}, nil, nil, conversationID)
-		_ = emitPluginStreamChunk(streamID, toolDelta)
+		_ = out.emit(map[string]any{"tool_calls": toolCalls}, nil, nil)
 
 		// The finish chunk and the usage chunk must stay separate: a usage chunk has empty choices.
 		finishReason := "tool_calls"
-		_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, &finishReason, nil, conversationID))
+		_ = out.emit(map[string]any{}, &finishReason, nil)
 		if streamWantsUsage(req) {
-			_ = emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, nil, openAIUsage(terminal.Usage), conversationID))
+			_ = out.emit(map[string]any{}, nil, openAIUsage(terminal.Usage))
 		}
-		_ = emitPluginStreamChunk(streamID, []byte("data: [DONE]\n\n"))
-		closePluginStream(streamID, nil)
+		out.finish()
 		return
 	}
 
 	// If it was buffered thinking it was a tool call but turned out not to be
 	if streamedText.Len() > emittedLen {
-		payload := makeSSEChunk(completionID, created, model, map[string]any{"content": streamedText.String()[emittedLen:]}, nil, nil, conversationID)
-		_ = emitPluginStreamChunk(streamID, payload)
+		_ = out.emit(map[string]any{"content": streamedText.String()[emittedLen:]}, nil, nil)
 	} else if streamedText.Len() == 0 && terminal.Response != "" {
-		if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{"content": terminal.Response}, nil, nil, conversationID)); err != nil {
+		if err := out.emit(map[string]any{"content": terminal.Response}, nil, nil); err != nil {
 			return
 		}
 	}
 
 	finish := "stop"
-	if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, &finish, nil, conversationID)); err != nil {
+	if err := out.emit(map[string]any{}, &finish, nil); err != nil {
 		return
 	}
 	if streamWantsUsage(req) {
-		if err := emitPluginStreamChunk(streamID, makeSSEChunk(completionID, created, model, map[string]any{}, nil, openAIUsage(terminal.Usage), conversationID)); err != nil {
+		if err := out.emit(map[string]any{}, nil, openAIUsage(terminal.Usage)); err != nil {
 			return
 		}
 	}
-	if err := emitPluginStreamChunk(streamID, []byte("data: [DONE]\n\n")); err != nil {
-		return
-	}
-	closePluginStream(streamID, nil)
+	out.finish()
 }
 
 type toolPrefixState int

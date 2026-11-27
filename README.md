@@ -1,5 +1,21 @@
 # CLIProxy Antigravity
 
+> [!IMPORTANT]
+> **This fork is archived: its changes are merged upstream.** Use
+> [adeebahmad01/cliproxy-antigravity](https://github.com/adeebahmad01/cliproxy-antigravity) v0.6.0 or
+> later (installable from the CLIProxyAPI plugin store) and set `mode: acp` to get the resident
+> `agy acp` mode.
+>
+> Upstream v0.6.0 adopted 14 of the fork's 16 commits: the resident ACP mode, transcript-fingerprinted
+> session reuse, media attachments, per-auth model registration, `.cpa-auth-file-issued`, single-line
+> tool call arguments and trailing usage chunks (upstream commits `cfadd93` and `a4e7c48`). Not taken:
+> the `agy-acp` provider key (upstream keeps `agy`) and `scripts/e2e_acp.py`. Upstream defaults to
+> `mode: print`.
+>
+> Moving a fork install to upstream: change `"type": "agy-acp"` to `"type": "agy"` in each account's
+> auth file, replace the plugin `.so`, then reload the config. Then restart CLIProxyAPI: a hot reload
+> leaves the old plugin library loaded, and it can still start an `agy acp` process of its own.
+
 A CLIProxyAPI dynamic provider that runs Google's **official Antigravity CLI (`agy`)** instead of reusing Antigravity OAuth tokens or calling private Antigravity endpoints.
 
 The plugin presents `agy` as an OpenAI-compatible Chat Completions provider inside CLIProxyAPI:

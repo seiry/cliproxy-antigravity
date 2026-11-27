@@ -1,5 +1,8 @@
 # Fork notes
 
+**Archived 2026-11-27.** Upstream v0.6.0 merged the fork's work; see the notice at the top of
+`README.md`. The notes below are the fork's history up to 0.4.0-acp.1.
+
 This is `seiry/cliproxy-antigravity`, a fork of
 [adeebahmad01/cliproxy-antigravity](https://github.com/adeebahmad01/cliproxy-antigravity). It keeps
 upstream's plugin and adds a resident `agy acp` execution mode. This file records what the fork changes
